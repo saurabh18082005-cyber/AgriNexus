@@ -1,0 +1,54 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+
+# Local DB / runtime data
+*.db
+*.sqlite
+*.sqlite3
+backend/data/*.db
+
+# ML training artifacts
+checkpoints/
+runs/
+wandb/
+*.h5
+*.hdf5
+*.keras
+*.onnx
+
+# But keep the shipped inference model
+!backend/models/*.tflite
+
+# Uploaded runtime files
+uploads/
+
+# Build artifacts
+frontend/dist/
