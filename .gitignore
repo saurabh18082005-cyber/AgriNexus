@@ -1,175 +1,54 @@
-# =========================================================
-# AgriNexus - .gitignore
-# =========================================================
-
-# ---------------------------------------------------------
-# Environment variables / Secrets
-# ---------------------------------------------------------
+# Environment
 .env
 .env.*
 !.env.example
-!.env.template
 
-# ---------------------------------------------------------
 # Python
-# ---------------------------------------------------------
 __pycache__/
 *.py[cod]
-*$py.class
 *.pyo
-*.pyd
-
-# Python virtual environments
 .venv/
 venv/
 env/
-ENV/
-env.bak/
-venv.bak/
 
-# Python packaging
-*.egg
-*.egg-info/
-dist/
-build/
-.eggs/
-
-# Test / coverage
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-.tox/
-.nox/
-
-# Type checking / linting caches
-.mypy_cache/
-.pyre/
-.ruff_cache/
-
-# ---------------------------------------------------------
-# Node.js / React / Vite
-# ---------------------------------------------------------
+# Node
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Vite
+dist/
 .vite/
 
-# Production build
-dist/
-
-# ---------------------------------------------------------
-# Frontend environment files
-# ---------------------------------------------------------
-frontend/.env
-frontend/.env.*
-!frontend/.env.example
-
-# ---------------------------------------------------------
-# Backend environment files
-# ---------------------------------------------------------
-backend/.env
-backend/.env.*
-!backend/.env.example
-
-# ---------------------------------------------------------
-# IDE / Editors
-# ---------------------------------------------------------
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*.swn
-*~
 
-# ---------------------------------------------------------
-# Operating System
-# ---------------------------------------------------------
+# OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
 Thumbs.db
-Desktop.ini
 
-# ---------------------------------------------------------
-# Logs
-# ---------------------------------------------------------
+# Logs / temp
 *.log
-logs/
-
-# ---------------------------------------------------------
-# Temporary files
-# ---------------------------------------------------------
 *.tmp
 *.temp
-*.bak
-*.backup
-*.cache
 
-# ---------------------------------------------------------
-# Jupyter Notebook
-# ---------------------------------------------------------
-.ipynb_checkpoints/
+# Local DB / runtime data
+*.db
+*.sqlite
+*.sqlite3
+backend/data/*.db
 
-# ---------------------------------------------------------
-# ML / AI temporary files
-# ---------------------------------------------------------
+# ML training artifacts
+checkpoints/
+runs/
+wandb/
 *.h5
 *.hdf5
 *.keras
 *.onnx
 
-# Temporary ML outputs
-ml/temp/
-ml/tmp/
-ml/outputs/
-ml/cache/
+# But keep the shipped inference model
+!backend/models/*.tflite
 
-# ---------------------------------------------------------
-# Model training artifacts
-# ---------------------------------------------------------
-checkpoints/
-runs/
-wandb/
-.tensorboard/
-
-# ---------------------------------------------------------
-# Database local files
-# ---------------------------------------------------------
-*.db
-*.sqlite
-*.sqlite3
-
-# PostgreSQL local data
-postgres-data/
-
-# ---------------------------------------------------------
-# Uploaded / generated files
-# ---------------------------------------------------------
+# Uploaded runtime files
 uploads/
-backend/uploads/
-frontend/uploads/
 
-generated/
-output/
-
-# ---------------------------------------------------------
-# Secrets / certificates / keys
-# ---------------------------------------------------------
-*.pem
-*.key
-*.crt
-*.p12
-*.pfx
-
-# ---------------------------------------------------------
-# Local configuration
-# ---------------------------------------------------------
-config.local.*
-settings.local.*
+# Build artifacts
+frontend/dist/
