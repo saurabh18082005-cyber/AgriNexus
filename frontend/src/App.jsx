@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import { LANG } from "./translations";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-
-const LANG = {
-  en: { name: "English", navHome: "Overview", navScan: "Scan Crop", navPassport: "Health Passport", navMarket: "Market Access", scan: "Scan Crop", choose: "Choose a leaf image", analyze: "Analyze Crop", analyzing: "Analyzing…", risk: "Disease Risk", weather: "Weather", passport: "Crop Health Passport", market: "Market Access", recommendation: "Recommended Action", recent: "Recent Scans", verified: "Verified Harvest", noData: "No scans yet" },
-  hi: { name: "हिन्दी", navHome: "ओवरव्यू", navScan: "फसल स्कैन", navPassport: "हेल्थ पासपोर्ट", navMarket: "बाज़ार", scan: "फसल स्कैन करें", choose: "पत्ती की फोटो चुनें", analyze: "फसल का विश्लेषण करें", analyzing: "विश्लेषण हो रहा है…", risk: "रोग जोखिम", weather: "मौसम", passport: "फसल स्वास्थ्य पासपोर्ट", market: "बाज़ार पहुँच", recommendation: "सुझाव", recent: "हाल के स्कैन", verified: "सत्यापित फसल", noData: "अभी कोई स्कैन नहीं" },
-  kn: { name: "ಕನ್ನಡ", navHome: "ಅವಲೋಕನ", navScan: "ಬೆಳೆ ಸ್ಕ್ಯಾನ್", navPassport: "ಆರೋಗ್ಯ ಪಾಸ್‌ಪೋರ್ಟ್", navMarket: "ಮಾರುಕಟ್ಟೆ", scan: "ಬೆಳೆ ಸ್ಕ್ಯಾನ್", choose: "ಎಲೆಯ ಚಿತ್ರ ಆಯ್ಕೆಮಾಡಿ", analyze: "ಬೆಳೆ ವಿಶ್ಲೇಷಿಸಿ", analyzing: "ವಿಶ್ಲೇಷಿಸಲಾಗುತ್ತಿದೆ…", risk: "ರೋಗದ ಅಪಾಯ", weather: "ಹವಾಮಾನ", passport: "ಬೆಳೆ ಆರೋಗ್ಯ ಪಾಸ್‌ಪೋರ್ಟ್", market: "ಮಾರುಕಟ್ಟೆ ಪ್ರವೇಶ", recommendation: "ಶಿಫಾರಸು", recent: "ಇತ್ತೀಚಿನ ಸ್ಕ್ಯಾನ್‌ಗಳು", verified: "ಪರಿಶೀಲಿಸಿದ ಬೆಳೆ", noData: "ಇನ್ನೂ ಸ್ಕ್ಯಾನ್ ಇಲ್ಲ" },
-};
 
 const demoWeather = { temperature: 28, humidity: 78, rainfall: 2, source: "demo-fallback" };
 
