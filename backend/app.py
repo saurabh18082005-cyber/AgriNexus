@@ -29,12 +29,20 @@ MODEL_PATH = ROOT / "models" / "crop_disease_model.tflite"
 
 
 CLASS_NAMES = [
+    "Tomato___Bacterial_spot",
+    "Tomato___Early_blight",
+    "Tomato___Late_blight",
+    "Tomato___Leaf_Mold",
+    "Tomato___Septoria_leaf_spot",
+    "Tomato___Spider_mites Two-spotted_spider_mite",
+    "Tomato___Target_Spot",
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+    "Tomato___Tomato_mosaic_virus",
+    "Tomato___healthy",
     "Potato___Early_blight",
     "Potato___healthy",
-    "Tomato___Early_blight",
-    "Tomato___healthy",
-    "Pepper,bell___Bacterial_spot",
-    "Pepper,bell___healthy",
+    "Pepper,_bell___Bacterial_spot",
+    "Pepper,_bell___healthy",
     "Grape___Black_rot",
     "Grape___healthy",
     "Corn_(maize)___Northern_Leaf_Blight",
@@ -42,12 +50,20 @@ CLASS_NAMES = [
 ]
 
 DISPLAY_NAMES = {
+    "Tomato___Bacterial_spot": ("Tomato", "Bacterial Spot"),
+    "Tomato___Early_blight": ("Tomato", "Early Blight"),
+    "Tomato___Late_blight": ("Tomato", "Late Blight"),
+    "Tomato___Leaf_Mold": ("Tomato", "Leaf Mold"),
+    "Tomato___Septoria_leaf_spot": ("Tomato", "Septoria Leaf Spot"),
+    "Tomato___Spider_mites Two-spotted_spider_mite": ("Tomato", "Spider Mites"),
+    "Tomato___Target_Spot": ("Tomato", "Target Spot"),
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": ("Tomato", "Yellow Leaf Curl Virus"),
+    "Tomato___Tomato_mosaic_virus": ("Tomato", "Mosaic Virus"),
+    "Tomato___healthy": ("Tomato", "Healthy"),
     "Potato___Early_blight": ("Potato", "Early Blight"),
     "Potato___healthy": ("Potato", "Healthy"),
-    "Tomato___Early_blight": ("Tomato", "Early Blight"),
-    "Tomato___healthy": ("Tomato", "Healthy"),
-    "Pepper,bell___Bacterial_spot": ("Pepper", "Bacterial Spot"),
-    "Pepper,bell___healthy": ("Pepper", "Healthy"),
+    "Pepper,_bell___Bacterial_spot": ("Pepper", "Bacterial Spot"),
+    "Pepper,_bell___healthy": ("Pepper", "Healthy"),
     "Grape___Black_rot": ("Grape", "Black Rot"),
     "Grape___healthy": ("Grape", "Healthy"),
     "Corn_(maize)___Northern_Leaf_Blight": ("Corn", "Northern Leaf Blight"),
@@ -98,8 +114,11 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
         raise HTTPException(status_code=400, detail="The uploaded file is not a valid image.") from exc
     if img.width < 32 or img.height < 32:
         raise HTTPException(status_code=400, detail="Please upload a clearer image (at least 32×32 pixels).")
-    img = img.resize((224, 224))
-    return np.expand_dims(np.asarray(img, dtype=np.float32) / 255.0, axis=0)
+    # Same centre-crop + resize as training. The v2 model takes raw 0-255 pixels (no /255).
+    side = min(img.size)
+    left, top = (img.width - side) // 2, (img.height - side) // 2
+    img = img.crop((left, top, left + side, top + side)).resize((224, 224), Image.BILINEAR)
+    return np.expand_dims(np.asarray(img, dtype=np.float32), axis=0)
 
 
 def tflite_predict(image_bytes: bytes) -> tuple[str, float, str]:
@@ -392,6 +411,7 @@ def create_harvest(payload: dict[str, Any], pg_db: Session = Depends(get_db)) ->
 
 
 @app.get("/api/buyers")
+
 def buyers(crop: str = Query("Tomato"), pg_db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     if pg_db.query(models.Buyer).count() == 0:
         demo_buyers = [
@@ -450,3 +470,4 @@ def create_listing(payload: dict[str, Any], pg_db: Session = Depends(get_db)) ->
     pg_db.refresh(listing)
 
     return {"id": listing.id, "message": "Market listing created successfully."}
+
