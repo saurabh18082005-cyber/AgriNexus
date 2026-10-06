@@ -6,3 +6,4 @@ python-multipart>=0.0.9,<1
 ai-edge-litert>=2.2,<3
 SQLAlchemy>=2.0,<3
 psycopg[binary]>=3.0,<4
+python-dotenv>=1.0,<2
