@@ -8,4 +8,4 @@ if [ ! -x ".venv/bin/python" ]; then
 else
   . .venv/bin/activate
 fi
-python -m uvicorn app:app --reload --port 8000
+python -m uvicorn app:app --reload --port 8001

@@ -4,7 +4,7 @@ import hashlib
 import io
 import json
 import os
-import sqlite3
+
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -12,8 +12,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from database.connection import engine, Base, get_db
+from database import models
 from PIL import Image, UnidentifiedImageError
 
 try:
@@ -23,16 +26,23 @@ except Exception:  # Optional at development time; demo fallback keeps the app r
 
 ROOT = Path(__file__).resolve().parent
 MODEL_PATH = ROOT / "models" / "crop_disease_model.tflite"
-DB_PATH = ROOT / "data" / "agrinexus.db"
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
 
 CLASS_NAMES = [
+    "Tomato___Bacterial_spot",
+    "Tomato___Early_blight",
+    "Tomato___Late_blight",
+    "Tomato___Leaf_Mold",
+    "Tomato___Septoria_leaf_spot",
+    "Tomato___Spider_mites Two-spotted_spider_mite",
+    "Tomato___Target_Spot",
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+    "Tomato___Tomato_mosaic_virus",
+    "Tomato___healthy",
     "Potato___Early_blight",
     "Potato___healthy",
-    "Tomato___Early_blight",
-    "Tomato___healthy",
-    "Pepper,bell___Bacterial_spot",
-    "Pepper,bell___healthy",
+    "Pepper,_bell___Bacterial_spot",
+    "Pepper,_bell___healthy",
     "Grape___Black_rot",
     "Grape___healthy",
     "Corn_(maize)___Northern_Leaf_Blight",
@@ -40,12 +50,20 @@ CLASS_NAMES = [
 ]
 
 DISPLAY_NAMES = {
+    "Tomato___Bacterial_spot": ("Tomato", "Bacterial Spot"),
+    "Tomato___Early_blight": ("Tomato", "Early Blight"),
+    "Tomato___Late_blight": ("Tomato", "Late Blight"),
+    "Tomato___Leaf_Mold": ("Tomato", "Leaf Mold"),
+    "Tomato___Septoria_leaf_spot": ("Tomato", "Septoria Leaf Spot"),
+    "Tomato___Spider_mites Two-spotted_spider_mite": ("Tomato", "Spider Mites"),
+    "Tomato___Target_Spot": ("Tomato", "Target Spot"),
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": ("Tomato", "Yellow Leaf Curl Virus"),
+    "Tomato___Tomato_mosaic_virus": ("Tomato", "Mosaic Virus"),
+    "Tomato___healthy": ("Tomato", "Healthy"),
     "Potato___Early_blight": ("Potato", "Early Blight"),
     "Potato___healthy": ("Potato", "Healthy"),
-    "Tomato___Early_blight": ("Tomato", "Early Blight"),
-    "Tomato___healthy": ("Tomato", "Healthy"),
-    "Pepper,bell___Bacterial_spot": ("Pepper", "Bacterial Spot"),
-    "Pepper,bell___healthy": ("Pepper", "Healthy"),
+    "Pepper,_bell___Bacterial_spot": ("Pepper", "Bacterial Spot"),
+    "Pepper,_bell___healthy": ("Pepper", "Healthy"),
     "Grape___Black_rot": ("Grape", "Black Rot"),
     "Grape___healthy": ("Grape", "Healthy"),
     "Corn_(maize)___Northern_Leaf_Blight": ("Corn", "Northern Leaf Blight"),
@@ -62,59 +80,8 @@ app.add_middleware(
 )
 
 
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
-
-def init_db() -> None:
-    with db() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS crops (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                farmer_name TEXT NOT NULL,
-                crop_type TEXT NOT NULL,
-                variety TEXT DEFAULT '',
-                location TEXT DEFAULT '',
-                planted_on TEXT DEFAULT '',
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS scans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                crop_id INTEGER NOT NULL,
-                disease TEXT NOT NULL,
-                crop_type TEXT NOT NULL,
-                confidence REAL NOT NULL,
-                risk_score REAL NOT NULL,
-                risk_level TEXT NOT NULL,
-                recommendation TEXT NOT NULL,
-                temperature REAL,
-                humidity REAL,
-                rainfall REAL,
-                latitude REAL,
-                longitude REAL,
-                source TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(crop_id) REFERENCES crops(id)
-            );
-            CREATE TABLE IF NOT EXISTS harvests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                crop_id INTEGER NOT NULL,
-                quantity REAL NOT NULL,
-                unit TEXT NOT NULL,
-                quality_grade TEXT NOT NULL,
-                verified INTEGER NOT NULL DEFAULT 0,
-                notes TEXT DEFAULT '',
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(crop_id) REFERENCES crops(id)
-            );
-            """
-        )
-
-
-init_db()
+Base.metadata.create_all(bind=engine)
 
 interpreter = None
 input_details: list[dict[str, Any]] = []
@@ -147,8 +114,11 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
         raise HTTPException(status_code=400, detail="The uploaded file is not a valid image.") from exc
     if img.width < 32 or img.height < 32:
         raise HTTPException(status_code=400, detail="Please upload a clearer image (at least 32×32 pixels).")
-    img = img.resize((224, 224))
-    return np.expand_dims(np.asarray(img, dtype=np.float32) / 255.0, axis=0)
+    # Same centre-crop + resize as training. The v2 model takes raw 0-255 pixels (no /255).
+    side = min(img.size)
+    left, top = (img.width - side) // 2, (img.height - side) // 2
+    img = img.crop((left, top, left + side, top + side)).resize((224, 224), Image.BILINEAR)
+    return np.expand_dims(np.asarray(img, dtype=np.float32), axis=0)
 
 
 def tflite_predict(image_bytes: bytes) -> tuple[str, float, str]:
@@ -236,16 +206,23 @@ def risk_engine(disease: str, confidence: float, temperature: float, humidity: f
     return {"score": score, "level": level, "recommendation": action}
 
 
-def ensure_crop(crop_type: str, location: str, farmer_name: str = "Demo Farmer") -> int:
-    with db() as conn:
-        row = conn.execute("SELECT id FROM crops WHERE crop_type=? AND location=? ORDER BY id LIMIT 1", (crop_type, location)).fetchone()
-        if row:
-            return int(row["id"])
-        cur = conn.execute(
-            "INSERT INTO crops (farmer_name,crop_type,location,created_at) VALUES (?,?,?,?)",
-            (farmer_name, crop_type, location, datetime.now(timezone.utc).isoformat()),
-        )
-        return int(cur.lastrowid)
+def ensure_crop(pg_db: Session, crop_type: str, location: str, farmer_name: str = "Demo Farmer") -> int:
+    crop = pg_db.query(models.Crop).filter(
+        models.Crop.crop_type == crop_type,
+        models.Crop.location == location
+    ).order_by(models.Crop.id).first()
+    if crop:
+        return crop.id
+
+    new_crop = models.Crop(
+        farmer_name=farmer_name,
+        crop_type=crop_type,
+        location=location
+    )
+    pg_db.add(new_crop)
+    pg_db.commit()
+    pg_db.refresh(new_crop)
+    return new_crop.id
 
 
 def label_parts(label: str) -> tuple[str, str]:
@@ -254,7 +231,7 @@ def label_parts(label: str) -> tuple[str, str]:
 
 @app.get("/")
 def root() -> dict[str, Any]:
-    return {"name": "AgriNexus API", "status": "running", "model_mode": MODEL_MODE, "database": str(DB_PATH.name)}
+    return {"name": "AgriNexus API", "status": "running", "model_mode": MODEL_MODE, "database": "PostgreSQL"}
 
 
 @app.get("/api/health")
@@ -274,6 +251,7 @@ async def scan(
     longitude: float = Query(77.5946),
     location: str = Query("Bengaluru"),
     farmer_name: str = Query("Demo Farmer"),
+    pg_db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Please upload an image file.")
@@ -284,18 +262,30 @@ async def scan(
     crop_type, disease = label_parts(label)
     wx = get_weather(latitude, longitude)
     risk = risk_engine(label, confidence, wx["temperature"], wx["humidity"], wx["rainfall"])
-    crop_id = ensure_crop(crop_type, location, farmer_name)
-    now = datetime.now(timezone.utc).isoformat()
-    with db() as conn:
-        cur = conn.execute(
-            """INSERT INTO scans
-            (crop_id,disease,crop_type,confidence,risk_score,risk_level,recommendation,temperature,humidity,rainfall,latitude,longitude,source,created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (crop_id, disease, crop_type, confidence, risk["score"], risk["level"], risk["recommendation"], wx["temperature"], wx["humidity"], wx["rainfall"], latitude, longitude, model_source, now),
-        )
-        scan_id = int(cur.lastrowid)
+
+    crop_id = ensure_crop(pg_db, crop_type, location, farmer_name)
+
+    new_scan = models.Scan(
+        crop_id=crop_id,
+        disease=disease,
+        crop_type=crop_type,
+        confidence=confidence,
+        risk_score=risk["score"],
+        risk_level=risk["level"],
+        recommendation=risk["recommendation"],
+        temperature=wx["temperature"],
+        humidity=wx["humidity"],
+        rainfall=wx["rainfall"],
+        latitude=latitude,
+        longitude=longitude,
+        source=model_source
+    )
+    pg_db.add(new_scan)
+    pg_db.commit()
+    pg_db.refresh(new_scan)
+
     return {
-        "scan_id": scan_id,
+        "scan_id": new_scan.id,
         "crop_id": crop_id,
         "crop": crop_type,
         "disease": disease,
@@ -305,7 +295,7 @@ async def scan(
         "risk": risk,
         "weather": wx,
         "location": location,
-        "created_at": now,
+        "created_at": new_scan.created_at,
     }
 
 
@@ -320,60 +310,164 @@ async def predict(file: UploadFile = File(...)) -> dict[str, Any]:
 
 
 @app.get("/api/crops")
-def crops() -> list[dict[str, Any]]:
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM crops ORDER BY id DESC").fetchall()
-    return [dict(r) for r in rows]
+def crops(pg_db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    rows = pg_db.query(models.Crop).order_by(models.Crop.id.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "farmer_name": r.farmer_name,
+            "crop_type": r.crop_type,
+            "variety": r.variety,
+            "location": r.location,
+            "planted_on": r.planted_on,
+            "created_at": r.created_at
+        } for r in rows
+    ]
 
 
 @app.get("/api/passport/{crop_id}")
-def passport(crop_id: int) -> dict[str, Any]:
-    with db() as conn:
-        crop = conn.execute("SELECT * FROM crops WHERE id=?", (crop_id,)).fetchone()
-        scans = conn.execute("SELECT * FROM scans WHERE crop_id=? ORDER BY id DESC", (crop_id,)).fetchall()
-        harvest = conn.execute("SELECT * FROM harvests WHERE crop_id=? ORDER BY id DESC LIMIT 1", (crop_id,)).fetchone()
+def passport(crop_id: int, pg_db: Session = Depends(get_db)) -> dict[str, Any]:
+    crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
     if not crop:
         raise HTTPException(status_code=404, detail="Crop passport not found.")
-    return {"crop": dict(crop), "scans": [dict(r) for r in scans], "harvest": dict(harvest) if harvest else None}
+
+    scans = pg_db.query(models.Scan).filter(models.Scan.crop_id == crop_id).order_by(models.Scan.id.desc()).all()
+    harvest = pg_db.query(models.Harvest).filter(models.Harvest.crop_id == crop_id).order_by(models.Harvest.id.desc()).first()
+
+    def to_dict(obj):
+        if not obj: return None
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
+    return {
+        "crop": to_dict(crop),
+        "scans": [to_dict(s) for s in scans],
+        "harvest": to_dict(harvest)
+    }
 
 
 @app.get("/api/dashboard")
-def dashboard() -> dict[str, Any]:
-    with db() as conn:
-        crop_count = conn.execute("SELECT COUNT(*) AS c FROM crops").fetchone()["c"]
-        scan_count = conn.execute("SELECT COUNT(*) AS c FROM scans").fetchone()["c"]
-        high_risk = conn.execute("SELECT COUNT(*) AS c FROM scans WHERE risk_level='High'").fetchone()["c"]
-        recent = conn.execute("SELECT * FROM scans ORDER BY id DESC LIMIT 5").fetchall()
-    return {"crops": crop_count, "scans": scan_count, "high_risk": high_risk, "recent": [dict(r) for r in recent]}
+def dashboard(pg_db: Session = Depends(get_db)) -> dict[str, Any]:
+    crop_count = pg_db.query(models.Crop).count()
+    scan_count = pg_db.query(models.Scan).count()
+    high_risk = pg_db.query(models.Scan).filter(models.Scan.risk_level == 'High').count()
+    recent = pg_db.query(models.Scan).order_by(models.Scan.id.desc()).limit(5).all()
+
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
+    return {
+        "crops": crop_count,
+        "scans": scan_count,
+        "high_risk": high_risk,
+        "recent": [to_dict(r) for r in recent]
+    }
 
 
 @app.post("/api/harvest")
-def create_harvest(payload: dict[str, Any]) -> dict[str, Any]:
+def create_harvest(payload: dict[str, Any], pg_db: Session = Depends(get_db)) -> dict[str, Any]:
     crop_id = int(payload.get("crop_id", 0))
     quantity = float(payload.get("quantity", 0))
     unit = str(payload.get("unit", "kg"))
     grade = str(payload.get("quality_grade", "A"))
     notes = str(payload.get("notes", ""))
+
     if crop_id <= 0 or quantity <= 0:
         raise HTTPException(status_code=400, detail="Crop and harvest quantity are required.")
-    with db() as conn:
-        if not conn.execute("SELECT 1 FROM crops WHERE id=?", (crop_id,)).fetchone():
-            raise HTTPException(status_code=404, detail="Crop not found.")
-        cur = conn.execute(
-            "INSERT INTO harvests (crop_id,quantity,unit,quality_grade,verified,notes,created_at) VALUES (?,?,?,?,?,?,?)",
-            (crop_id, quantity, unit, grade, 1, notes, datetime.now(timezone.utc).isoformat()),
-        )
-        hid = int(cur.lastrowid)
-    return {"id": hid, "verified": True, "message": "Harvest recorded and marked demo-verified."}
+
+    crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+    if not crop:
+        raise HTTPException(status_code=404, detail="Crop not found.")
+
+    scan_count = pg_db.query(models.Scan).filter(models.Scan.crop_id == crop_id).count()
+    if scan_count > 0:
+        v_status = "VERIFIED"
+        v_reason = "Crop has a verifiable health scan history."
+        is_verified = 1
+    else:
+        v_status = "REJECTED"
+        v_reason = "No health scans found for this crop."
+        is_verified = 0
+
+    new_harvest = models.Harvest(
+        crop_id=crop_id,
+        quantity=quantity,
+        unit=unit,
+        quality_grade=grade,
+        notes=notes,
+        verified=is_verified,
+        verification_status=v_status,
+        verification_reason=v_reason
+    )
+    pg_db.add(new_harvest)
+    pg_db.commit()
+    pg_db.refresh(new_harvest)
+
+    return {
+        "id": new_harvest.id,
+        "verified": bool(is_verified),
+        "verification_status": v_status,
+        "message": v_reason
+    }
 
 
 @app.get("/api/buyers")
-def buyers(crop: str = Query("Tomato")) -> list[dict[str, Any]]:
-    base = [
-        {"name": "Karnataka Fresh Foods", "location": "Bengaluru", "interest": "Fresh produce", "min_grade": "B"},
-        {"name": "South India Agro Hub", "location": "Mysuru", "interest": "Vegetables & bulk supply", "min_grade": "A"},
-        {"name": "GreenBasket Wholesale", "location": "Bengaluru", "interest": "Retail-grade produce", "min_grade": "A"},
-    ]
-    for item in base:
-        item["crop"] = crop
-    return base
+
+def buyers(crop: str = Query("Tomato"), pg_db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    if pg_db.query(models.Buyer).count() == 0:
+        demo_buyers = [
+            models.Buyer(name="Karnataka Fresh Foods", location="Bengaluru", interest="Fresh produce", min_grade="B"),
+            models.Buyer(name="South India Agro Hub", location="Mysuru", interest="Vegetables & bulk supply", min_grade="A"),
+            models.Buyer(name="GreenBasket Wholesale", location="Bengaluru", interest="Retail-grade produce", min_grade="A"),
+        ]
+        pg_db.add_all(demo_buyers)
+        pg_db.commit()
+
+    db_buyers = pg_db.query(models.Buyer).all()
+    results = []
+    for b in db_buyers:
+        results.append({
+            "id": b.id,
+            "name": b.name,
+            "location": b.location,
+            "interest": b.interest,
+            "min_grade": b.min_grade,
+            "crop": crop
+        })
+    return results
+
+
+@app.get("/api/market/listings")
+def get_listings(pg_db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    listings = pg_db.query(models.MarketListing).order_by(models.MarketListing.id.desc()).all()
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    return [to_dict(l) for l in listings]
+
+
+@app.post("/api/market/listings")
+def create_listing(payload: dict[str, Any], pg_db: Session = Depends(get_db)) -> dict[str, Any]:
+    harvest_id = int(payload.get("harvest_id", 0))
+    if harvest_id <= 0:
+        raise HTTPException(status_code=400, detail="harvest_id is required.")
+
+    harvest = pg_db.query(models.Harvest).filter(models.Harvest.id == harvest_id).first()
+    if not harvest:
+        raise HTTPException(status_code=404, detail="Harvest not found.")
+
+    if harvest.verification_status != "VERIFIED":
+        raise HTTPException(status_code=400, detail="Only VERIFIED harvests can be listed on the market.")
+
+    listing = models.MarketListing(
+        harvest_id=harvest.id,
+        crop_type=harvest.crop.crop_type,
+        quantity=harvest.quantity,
+        unit=harvest.unit,
+        quality_grade=harvest.quality_grade,
+        status="AVAILABLE"
+    )
+    pg_db.add(listing)
+    pg_db.commit()
+    pg_db.refresh(listing)
+
+    return {"id": listing.id, "message": "Market listing created successfully."}
+
