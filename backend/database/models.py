@@ -1,7 +1,11 @@
+import uuid
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .connection import Base
+
+def generate_public_code():
+    return uuid.uuid4().hex[:8]
 
 class Crop(Base):
     __tablename__ = "crops"
@@ -12,6 +16,7 @@ class Crop(Base):
     variety = Column(String, default="")
     location = Column(String, default="")
     planted_on = Column(String, default="")
+    public_code = Column(String, unique=True, index=True, nullable=False, default=generate_public_code)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     scans = relationship("Scan", back_populates="crop")
@@ -61,9 +66,32 @@ class Buyer(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     location = Column(String, nullable=False)
+    district = Column(String, default="")
     interest = Column(String, nullable=False)
     min_grade = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    requests = relationship("BuyerRequest", back_populates="buyer")
+
+class BuyerRequest(Base):
+    __tablename__ = "buyer_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_id = Column(Integer, ForeignKey("buyers.id"), nullable=False)
+    crop_type = Column(String, nullable=False)
+    quantity = Column(Float, nullable=False)
+    unit = Column(String, default="kg")
+    min_grade = Column(String, nullable=False)
+    location = Column(String, default="")
+    window_start = Column(DateTime(timezone=True), nullable=True)
+    window_end = Column(DateTime(timezone=True), nullable=True)
+    price_min = Column(Float, nullable=True)
+    price_max = Column(Float, nullable=True)
+    status = Column(String, default="OPEN", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+
+    buyer = relationship("Buyer", back_populates="requests")
 
 class MarketListing(Base):
     __tablename__ = "market_listings"
@@ -74,6 +102,10 @@ class MarketListing(Base):
     quantity = Column(Float, nullable=False)
     unit = Column(String, nullable=False)
     quality_grade = Column(String, nullable=False)
+    ask_price_per_kg = Column(Float, default=0.0)
+    quantity_remaining = Column(Float, nullable=False)
+    ready_from = Column(DateTime(timezone=True), nullable=True)
+    ready_to = Column(DateTime(timezone=True), nullable=True)
     status = Column(String, default="AVAILABLE")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
