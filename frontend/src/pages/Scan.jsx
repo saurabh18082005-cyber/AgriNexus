@@ -1,6 +1,7 @@
 import CircularGauge from "../components/CircularGauge";
 import RiskBadge from "../components/RiskBadge";
 import ScanLaserOverlay from "../components/ScanLaserOverlay";
+import TreatmentPlan from "../components/TreatmentPlan";
 import specimenLeafAi from "../assets/specimen_leaf_ai.jpg";
 
 export default function Scan({
@@ -220,6 +221,12 @@ export default function Scan({
                 </div>
                 <p>{t.recommendations?.[result.risk?.recommendation] || result.risk?.recommendation}</p>
               </div>
+
+              <TreatmentPlan
+                diseaseClass={result.disease_class}
+                confidence={result.confidence}
+                location={location}
+              />
 
               {/* Report Actions */}
               <div className="report-actions-row">

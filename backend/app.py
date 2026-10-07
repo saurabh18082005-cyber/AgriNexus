@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from database.connection import engine, Base, get_db
 from database import models
 from PIL import Image, UnidentifiedImageError
+from treatment_routes import router as treatment_router
 
 try:
     from ai_edge_litert.interpreter import Interpreter
@@ -78,6 +79,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(treatment_router)
 
 
 
@@ -289,6 +291,7 @@ async def scan(
         "crop_id": crop_id,
         "crop": crop_type,
         "disease": disease,
+        "disease_class": label,
         "prediction": label,
         "confidence": confidence,
         "model_source": model_source,
@@ -470,4 +473,3 @@ def create_listing(payload: dict[str, Any], pg_db: Session = Depends(get_db)) ->
     pg_db.refresh(listing)
 
     return {"id": listing.id, "message": "Market listing created successfully."}
-
