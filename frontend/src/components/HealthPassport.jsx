@@ -97,6 +97,7 @@ export default function HealthPassport({
   sprays = [],
   onRescan = () => {},
   onVerifyHarvest = () => {},
+  showHarvestPanel = true,
 }) {
   const [qty, setQty] = useState(100);
   const [quality, setQuality] = useState("Grade A (Premium Retail)");
@@ -106,7 +107,7 @@ export default function HealthPassport({
     <div className="hp">
       <style>{CSS}</style>
 
-      <div className="hp-grid">
+      <div className="hp-grid" style={showHarvestPanel ? undefined : { gridTemplateColumns: "minmax(0, 1fr)" }}>
         {/* LEFT: passport */}
         <section className="hp-card hp-main">
           <header className="hp-head">
@@ -218,6 +219,7 @@ export default function HealthPassport({
         </section>
 
         {/* RIGHT: harvest */}
+        {showHarvestPanel && (
         <aside className="hp-card hp-side">
           <h3>Verified harvest</h3>
           <label>Quantity (kg)</label>
@@ -242,6 +244,7 @@ export default function HealthPassport({
               : s.reason || "Harvest verification opens after disease control and healthy scans."}
           </p>
         </aside>
+        )}
       </div>
     </div>
   );
