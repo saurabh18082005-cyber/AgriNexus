@@ -854,7 +854,40 @@ def get_deal(deal_id: int, pg_db: Session = Depends(get_db)):
     deal = pg_db.query(models.Deal).filter(models.Deal.id == deal_id).first()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
-    return {c.name: getattr(deal, c.name) for c in deal.__table__.columns}
+
+    buyer = deal.buyer_request.buyer
+    listing = deal.listing
+    crop = listing.harvest.crop
+    request = deal.buyer_request
+
+    result = {c.name: getattr(deal, c.name) for c in deal.__table__.columns}
+
+    result["buyer"] = {
+        "id": buyer.id,
+        "name": buyer.name,
+        "location": buyer.location
+    }
+
+    result["farmer"] = {
+        "name": crop.farmer_name,
+        "location": crop.location
+    }
+
+    result["crop"] = {
+        "id": crop.id,
+        "crop_type": crop.crop_type,
+        "variety": crop.variety,
+        "quality_grade": listing.quality_grade
+    }
+
+    result["timeline"] = {
+        "buyer_window_start": request.window_start.isoformat() if request.window_start else None,
+        "buyer_window_end": request.window_end.isoformat() if request.window_end else None,
+        "ready_from": listing.ready_from.isoformat() if listing.ready_from else None,
+        "ready_to": listing.ready_to.isoformat() if listing.ready_to else None
+    }
+
+    return result
 
 @app.patch("/api/deals/{deal_id}/status")
 def update_deal_status(deal_id: int, payload: DealStatusUpdate, pg_db: Session = Depends(get_db)):
