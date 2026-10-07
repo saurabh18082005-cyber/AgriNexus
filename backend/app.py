@@ -4,13 +4,14 @@ import hashlib
 import io
 import json
 import os
+from datetime import datetime, timedelta, timezone
 
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,6 +83,14 @@ app.add_middleware(
 app.include_router(treatment_router)
 
 
+SPRAY_WEATHER_THRESHOLDS = {
+    "rain_probability_max": 30,
+    "wind_speed_max": 15,
+    "temperature_max": 35,
+    "rain_alert_probability": 50,
+}
+SPRAY_WEATHER_CACHE_TTL = timedelta(minutes=30)
+spray_weather_cache: dict[tuple[float, float], tuple[datetime, dict[str, Any]]] = {}
 
 Base.metadata.create_all(bind=engine)
 
@@ -184,12 +193,19 @@ def get_weather(lat: float, lon: float) -> dict[str, Any]:
         return weather_fallback(lat, lon)
 
 
+DISEASE_BASE = {
+    "Grape___Black_rot": 65,
+    "Tomato___Late_blight": 65,
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus": 60,
+    "Tomato___Tomato_mosaic_virus": 55,
+}
+DEFAULT_DISEASE_BASE = 45
+HEALTHY_BASE = 8
+
+
 def risk_engine(disease: str, confidence: float, temperature: float, humidity: float, rainfall: float) -> dict[str, Any]:
     healthy = "healthy" in disease.lower()
-    if healthy:
-        base = 8.0
-    else:
-        base = 35.0 + min(confidence * 0.25, 25.0)
+    base = HEALTHY_BASE if healthy else DISEASE_BASE.get(disease, DEFAULT_DISEASE_BASE)
     moisture = max(0.0, min((humidity - 55.0) * 0.7, 28.0))
     rain_factor = max(0.0, min(rainfall * 2.0, 12.0))
     temp_factor = 8.0 if 20 <= temperature <= 32 and not healthy else 0.0
@@ -244,6 +260,84 @@ def health() -> dict[str, Any]:
 @app.get("/api/weather")
 def weather(latitude: float = Query(12.9716), longitude: float = Query(77.5946)) -> dict[str, Any]:
     return get_weather(latitude, longitude)
+
+
+@app.get("/api/spray-advice")
+def spray_advice(latitude: float, longitude: float) -> dict[str, Any]:
+    cache_key = (round(latitude, 2), round(longitude, 2))
+    now = datetime.now(timezone.utc)
+    cached = spray_weather_cache.get(cache_key)
+    if cached and now - cached[0] < SPRAY_WEATHER_CACHE_TTL:
+        return cached[1]
+
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": "precipitation_probability,precipitation,wind_speed_10m,temperature_2m,relative_humidity_2m",
+        "forecast_days": 2,
+        "timezone": "auto",
+    }
+    try:
+        response = httpx.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params=params,
+            timeout=8,
+        )
+        response.raise_for_status()
+        hourly = response.json()["hourly"]
+        rows = []
+        for index, timestamp in enumerate(hourly["time"][:48]):
+            rain_pct = float(hourly["precipitation_probability"][index])
+            rain_mm = float(hourly["precipitation"][index])
+            wind_kmh = float(hourly["wind_speed_10m"][index])
+            temp_c = float(hourly["temperature_2m"][index])
+            humidity = float(hourly["relative_humidity_2m"][index])
+            rows.append({
+                "time": timestamp,
+                "rain_pct": rain_pct,
+                "rain_mm": rain_mm,
+                "wind_kmh": wind_kmh,
+                "temp_c": temp_c,
+                "humidity": humidity,
+                "ok": (
+                    rain_pct < SPRAY_WEATHER_THRESHOLDS["rain_probability_max"]
+                    and rain_mm == 0
+                    and wind_kmh < SPRAY_WEATHER_THRESHOLDS["wind_speed_max"]
+                    and temp_c < SPRAY_WEATHER_THRESHOLDS["temperature_max"]
+                ),
+            })
+        if not rows:
+            raise ValueError("Open-Meteo returned no hourly forecast.")
+
+        best_window = None
+        for index in range(len(rows) - 2):
+            if all(row["ok"] for row in rows[index:index + 3]):
+                best_window = {
+                    "start": rows[index]["time"],
+                    "end": rows[index + 2]["time"],
+                }
+                break
+        next_rain = next(
+            (
+                {"time": row["time"], "rain_pct": row["rain_pct"], "rain_mm": row["rain_mm"]}
+                for row in rows
+                if row["rain_pct"] >= SPRAY_WEATHER_THRESHOLDS["rain_alert_probability"] or row["rain_mm"] > 0
+            ),
+            None,
+        )
+        result = {
+            "hourly": rows,
+            "best_window": best_window,
+            "next_rain": next_rain,
+            "updated_at": now.isoformat(),
+            "stale": False,
+        }
+        spray_weather_cache[cache_key] = (now, result)
+        return result
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        if cached:
+            return {**cached[1], "stale": True}
+        return {"error": "Spray weather forecast is unavailable.", "updated_at": now.isoformat()}
 
 
 @app.post("/api/scan")

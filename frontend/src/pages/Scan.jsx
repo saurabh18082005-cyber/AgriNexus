@@ -11,6 +11,7 @@ export default function Scan({
   handleFile,
   fileRef,
   location,
+  coords,
   setLocation,
   useLocation,
   analyze,
@@ -18,6 +19,9 @@ export default function Scan({
   result,
   openPassport,
   openMarket,
+  readyToSell,
+  readyReason,
+  onRescan,
 }) {
   const onDragOver = (e) => {
     e.preventDefault();
@@ -160,7 +164,7 @@ export default function Scan({
                     value={result.confidence}
                     size={116}
                     strokeWidth={10}
-                    label={t.confidenceLabel}
+                    label="MODEL CONFIDENCE"
                     subLabel={result.confidence >= 85 ? t.confidenceHigh : t.confidenceModerate}
                     color={result.confidence >= 80 ? "#15803d" : "#d97706"}
                   />
@@ -184,7 +188,7 @@ export default function Scan({
               {/* Multi-Tier Risk Evaluation Meter */}
               <div className="report-risk-strip">
                 <div className="risk-score-group">
-                  <span className="risk-label-mini">{t.risk}</span>
+                  <span className="risk-label-mini">Disease spread risk</span>
                   <span className="risk-score-big">{result.risk?.score ?? 0}%</span>
                 </div>
 
@@ -213,19 +217,14 @@ export default function Scan({
                 </div>
               )}
 
-              {/* Clinical Agronomy Prescription */}
-              <div className="report-prescription-box">
-                <div className="prescription-head">
-                  <span>📋</span>
-                  <strong>{t.recommendation}</strong>
-                </div>
-                <p>{t.recommendations?.[result.risk?.recommendation] || result.risk?.recommendation}</p>
-              </div>
-
               <TreatmentPlan
                 diseaseClass={result.disease_class}
-                confidence={result.confidence}
+                cropId={result.crop_id}
+                scanDate={result.created_at}
                 location={location}
+                coords={coords}
+                recommendation={t.recommendations?.[result.risk?.recommendation] || result.risk?.recommendation}
+                onRescan={onRescan}
               />
 
               {/* Report Actions */}
@@ -241,10 +240,12 @@ export default function Scan({
                   type="button"
                   className="btn-primary report-action-btn"
                   onClick={openMarket}
+                  disabled={!readyToSell}
                 >
                   🤝 {t.findBuyers}
                 </button>
               </div>
+              {!readyToSell && <p>{readyReason}</p>}
             </div>
           ) : (
             <div className="report-idle-chamber">

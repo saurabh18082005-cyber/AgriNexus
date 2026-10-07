@@ -1,11 +1,11 @@
 {
   "Tomato___Bacterial_spot": {
     "type": "bacterial",
-    "medicine": "Copper oxychloride 50% WP",
+    "medicine": "Copper oxychloride 50% WP + Streptocycline",
     "dose": 3, "dose_unit": "g", "water_l_per_acre": 200,
     "sprays": 3, "interval_days": 10, "wait_days": 7,
     "organic": "Neem oil 5 ml/L; remove infected leaves; avoid overhead watering",
-    "advice": "Remove badly infected leaves first. Do not work in the field when plants are wet.",
+    "advice": "Remove badly infected leaves first. Do not work in the field when plants are wet. Streptocycline is used at a very low dose (about 0.1 g/L); follow the label.",
     "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
   },
   "Tomato___Early_blight": {
@@ -28,7 +28,7 @@
   },
   "Tomato___Leaf_Mold": {
     "type": "fungal",
-    "medicine": "Chlorothalonil 75% WP",
+    "medicine": "Carbendazim 12% + Mancozeb 63% WP",
     "dose": 2, "dose_unit": "g", "water_l_per_acre": 200,
     "sprays": 3, "interval_days": 10, "wait_days": 7,
     "organic": "Neem oil 5 ml/L; improve air flow between plants",
@@ -81,11 +81,11 @@
   },
   "Potato___Early_blight": {
     "type": "fungal",
-    "medicine": "Mancozeb 75% WP",
-    "dose": 2.5, "dose_unit": "g", "water_l_per_acre": 200,
-    "sprays": 3, "interval_days": 10, "wait_days": 7,
+    "medicine": "Difenoconazole 25% EC",
+    "dose": 0.5, "dose_unit": "ml", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 14,
     "organic": "Trichoderma or neem oil 5 ml/L; remove infected leaves",
-    "advice": "Remove infected leaves and avoid overhead watering.",
+    "advice": "Remove infected leaves and avoid overhead watering. Rotate with a different fungicide group next time to prevent resistance.",
     "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
   },
   "Potato___healthy": {
@@ -95,8 +95,8 @@
   },
   "Pepper,_bell___Bacterial_spot": {
     "type": "bacterial",
-    "medicine": "Copper oxychloride 50% WP",
-    "dose": 3, "dose_unit": "g", "water_l_per_acre": 200,
+    "medicine": "Copper hydroxide 77% WP",
+    "dose": 2, "dose_unit": "g", "water_l_per_acre": 200,
     "sprays": 3, "interval_days": 10, "wait_days": 7,
     "organic": "Neem oil 5 ml/L; remove infected leaves; avoid overhead watering",
     "advice": "Remove badly infected leaves. Do not work in the field when plants are wet.",
@@ -109,9 +109,9 @@
   },
   "Grape___Black_rot": {
     "type": "fungal",
-    "medicine": "Mancozeb 75% WP",
-    "dose": 2.5, "dose_unit": "g", "water_l_per_acre": 400,
-    "sprays": 3, "interval_days": 10, "wait_days": 10,
+    "medicine": "Myclobutanil 10% WP",
+    "dose": 0.5, "dose_unit": "g", "water_l_per_acre": 400,
+    "sprays": 3, "interval_days": 10, "wait_days": 14,
     "organic": "Remove and destroy infected leaves and mummified berries; copper-based spray",
     "advice": "Remove mummified berries and infected leaves, because they carry the disease to the next season.",
     "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
@@ -123,9 +123,9 @@
   },
   "Corn_(maize)___Northern_Leaf_Blight": {
     "type": "fungal",
-    "medicine": "Mancozeb 75% WP",
-    "dose": 2.5, "dose_unit": "g", "water_l_per_acre": 200,
-    "sprays": 2, "interval_days": 12, "wait_days": 10,
+    "medicine": "Propiconazole 25% EC",
+    "dose": 1, "dose_unit": "ml", "water_l_per_acre": 200,
+    "sprays": 2, "interval_days": 12, "wait_days": 14,
     "organic": "Remove infected lower leaves; rotate crops next season",
     "advice": "Spray when the first lesions appear. Rotate crops next season.",
     "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"

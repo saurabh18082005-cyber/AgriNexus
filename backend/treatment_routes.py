@@ -7,6 +7,7 @@ Hook it up in backend/app.py with two lines:
     app.include_router(treatment_router)
 """
 import json
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -14,6 +15,10 @@ from fastapi import APIRouter, HTTPException, Query
 router = APIRouter()
 
 DATA = json.loads((Path(__file__).parent / "treatments.json").read_text(encoding="utf-8"))
+NORMALIZED_DATA = {
+    re.sub(r"[\s_]+", " ", key.strip().lower()): value
+    for key, value in DATA.items()
+}
 
 # 1 acre = 40 guntha, 1 hectare = 2.471 acre
 ACRES_PER_UNIT = {"acre": 1.0, "guntha": 1 / 40, "hectare": 2.471}
@@ -32,7 +37,7 @@ def get_treatment(
     area: float = Query(..., gt=0, description="Field size"),
     unit: str = "acre",
 ):
-    entry = DATA.get(disease)
+    entry = NORMALIZED_DATA.get(re.sub(r"[\s_]+", " ", disease.strip().lower()))
     if entry is None:
         raise HTTPException(status_code=404, detail=f"No treatment entry for '{disease}'")
 

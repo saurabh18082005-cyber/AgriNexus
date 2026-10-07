@@ -8,6 +8,8 @@ export default function Passport({
   openPassport,
   setPage,
   apiUrl,
+  readyToSell,
+  readyReason,
 }) {
   const isHarvested = Boolean(passport?.harvest);
   const fillText = fill || ((text, vars) => text.replace(/\{(\w+)\}/g, (_, key) => vars[key]));
@@ -186,6 +188,10 @@ export default function Passport({
                 />
               </div>
             )}
+            <div className={`market-badge ${readyToSell ? "" : "status-pending"}`}>
+              {readyToSell ? "✓ Ready to sell" : "Not ready"}
+            </div>
+            {!readyToSell && <p>{readyReason}</p>}
           </div>
         </div>
       ) : (
