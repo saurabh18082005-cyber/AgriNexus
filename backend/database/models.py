@@ -128,3 +128,20 @@ class Offer(Base):
     buyer_request = relationship("BuyerRequest")
     listing = relationship("MarketListing")
     parent_offer = relationship("Offer", remote_side=[id])
+
+class Deal(Base):
+    __tablename__ = "deals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    offer_id = Column(Integer, ForeignKey("offers.id"), nullable=False, unique=True)
+    buyer_request_id = Column(Integer, ForeignKey("buyer_requests.id"), nullable=False)
+    listing_id = Column(Integer, ForeignKey("market_listings.id"), nullable=False)
+    quantity = Column(Float, nullable=False)
+    price_per_kg = Column(Float, nullable=False)
+    status = Column(String, default="CONFIRMED", index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    offer = relationship("Offer")
+    buyer_request = relationship("BuyerRequest")
+    listing = relationship("MarketListing")

@@ -791,6 +791,50 @@ def update_offer_status(offer_id: int, payload: OfferStatusUpdate, pg_db: Sessio
     if payload.status not in ["ACCEPTED", "REJECTED"]:
         raise HTTPException(status_code=400, detail="Invalid status transition")
 
+    if payload.status == "ACCEPTED":
+        # Lock the market_listing row
+        listing = pg_db.query(models.MarketListing).with_for_update().filter(models.MarketListing.id == offer.listing_id).first()
+
+        if not listing:
+            pg_db.rollback()
+            raise HTTPException(status_code=404, detail="Listing not found")
+
+        if listing.status != "AVAILABLE":
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Listing is no longer AVAILABLE")
+
+        harvest = listing.harvest
+        if not harvest or harvest.verification_status != "VERIFIED":
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Linked harvest is not VERIFIED")
+
+        if offer.quantity <= 0:
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Offer quantity must be > 0")
+
+        if offer.quantity > listing.quantity_remaining:
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Offer quantity exceeds listing remaining quantity")
+
+        existing_deal = pg_db.query(models.Deal).filter(models.Deal.offer_id == offer_id).first()
+        if existing_deal:
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Deal already exists for this offer")
+
+        listing.quantity_remaining -= offer.quantity
+        if listing.quantity_remaining <= 0:
+            listing.status = "SOLD_OUT"
+
+        deal = models.Deal(
+            offer_id=offer.id,
+            buyer_request_id=offer.buyer_request_id,
+            listing_id=offer.listing_id,
+            quantity=offer.quantity,
+            price_per_kg=offer.price_per_kg,
+            status="CONFIRMED"
+        )
+        pg_db.add(deal)
+
     offer.status = payload.status
     pg_db.commit()
     return {"id": offer.id, "status": offer.status}
