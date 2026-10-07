@@ -9,8 +9,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Optional
+from pydantic import BaseModel
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -692,3 +692,105 @@ def match_buyer_request(request_id: int, pg_db: Session = Depends(get_db)):
         "excluded": excluded
     }
 
+
+class OfferCreatePayload(BaseModel):
+    buyer_request_id: int
+    listing_id: int
+    quantity: float
+    price_per_kg: float
+    parent_offer_id: Optional[int] = None
+
+class OfferStatusUpdate(BaseModel):
+    status: str
+
+@app.post("/api/offers")
+def create_offer(payload: OfferCreatePayload, pg_db: Session = Depends(get_db)):
+    req = pg_db.query(models.BuyerRequest).filter(models.BuyerRequest.id == payload.buyer_request_id).first()
+    if not req:
+        raise HTTPException(status_code=400, detail="BuyerRequest not found")
+
+    listing = pg_db.query(models.MarketListing).filter(models.MarketListing.id == payload.listing_id).first()
+    if not listing:
+        raise HTTPException(status_code=400, detail="MarketListing not found")
+
+    if listing.status != "AVAILABLE":
+        raise HTTPException(status_code=400, detail="Listing is not AVAILABLE")
+
+    harvest = listing.harvest
+    if not harvest or harvest.verification_status != "VERIFIED":
+        raise HTTPException(status_code=400, detail="Linked harvest is not VERIFIED")
+
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be > 0")
+
+    if payload.quantity > req.quantity:
+        raise HTTPException(status_code=400, detail="Quantity exceeds buyer request quantity")
+
+    if payload.quantity > listing.quantity_remaining:
+        raise HTTPException(status_code=400, detail="Quantity exceeds quantity_remaining")
+
+    if payload.price_per_kg < 0:
+        raise HTTPException(status_code=400, detail="Price cannot be negative")
+
+    counter_count = 0
+
+    if payload.parent_offer_id:
+        parent = pg_db.query(models.Offer).filter(models.Offer.id == payload.parent_offer_id).first()
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent offer not found")
+        if parent.buyer_request_id != payload.buyer_request_id or parent.listing_id != payload.listing_id:
+            raise HTTPException(status_code=400, detail="Parent offer must belong to the same request and listing")
+        if parent.status != "PENDING":
+            raise HTTPException(status_code=400, detail="Parent offer must be PENDING")
+        if parent.counter_count >= 1:
+            raise HTTPException(status_code=400, detail="Only one counter round is allowed")
+
+        counter_count = parent.counter_count + 1
+        parent.status = "COUNTERED"
+    else:
+        if req.price_max is not None and payload.price_per_kg > req.price_max:
+            raise HTTPException(status_code=400, detail="Price exceeds buyer maximum")
+
+    new_offer = models.Offer(
+        buyer_request_id=payload.buyer_request_id,
+        listing_id=payload.listing_id,
+        quantity=payload.quantity,
+        price_per_kg=payload.price_per_kg,
+        status="PENDING",
+        parent_offer_id=payload.parent_offer_id,
+        counter_count=counter_count
+    )
+    pg_db.add(new_offer)
+    pg_db.commit()
+    pg_db.refresh(new_offer)
+
+    return {"id": new_offer.id, "status": new_offer.status}
+
+@app.get("/api/offers")
+def get_offers(buyer_request_id: Optional[int] = None, listing_id: Optional[int] = None, pg_db: Session = Depends(get_db)):
+    query = pg_db.query(models.Offer)
+    if buyer_request_id is not None:
+        query = query.filter(models.Offer.buyer_request_id == buyer_request_id)
+    if listing_id is not None:
+        query = query.filter(models.Offer.listing_id == listing_id)
+
+    offers = query.order_by(models.Offer.id.desc()).all()
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    return [to_dict(o) for o in offers]
+
+@app.patch("/api/offers/{offer_id}/status")
+def update_offer_status(offer_id: int, payload: OfferStatusUpdate, pg_db: Session = Depends(get_db)):
+    offer = pg_db.query(models.Offer).filter(models.Offer.id == offer_id).first()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    if offer.status != "PENDING":
+        raise HTTPException(status_code=400, detail="Only PENDING offers can be updated")
+
+    if payload.status not in ["ACCEPTED", "REJECTED"]:
+        raise HTTPException(status_code=400, detail="Invalid status transition")
+
+    offer.status = payload.status
+    pg_db.commit()
+    return {"id": offer.id, "status": offer.status}

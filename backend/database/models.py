@@ -110,3 +110,21 @@ class MarketListing(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     harvest = relationship("Harvest", back_populates="listings")
+
+class Offer(Base):
+    __tablename__ = "offers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    buyer_request_id = Column(Integer, ForeignKey("buyer_requests.id"), nullable=False)
+    listing_id = Column(Integer, ForeignKey("market_listings.id"), nullable=False)
+    quantity = Column(Float, nullable=False)
+    price_per_kg = Column(Float, nullable=False)
+    status = Column(String, default="PENDING", index=True)
+    parent_offer_id = Column(Integer, ForeignKey("offers.id"), nullable=True)
+    counter_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    buyer_request = relationship("BuyerRequest")
+    listing = relationship("MarketListing")
+    parent_offer = relationship("Offer", remote_side=[id])
