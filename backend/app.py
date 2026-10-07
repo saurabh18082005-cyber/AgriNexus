@@ -709,6 +709,9 @@ def create_offer(payload: OfferCreatePayload, pg_db: Session = Depends(get_db)):
     if not req:
         raise HTTPException(status_code=400, detail="BuyerRequest not found")
 
+    if req.status == "FULFILLED":
+        raise HTTPException(status_code=400, detail="Buyer request is already FULFILLED")
+
     listing = pg_db.query(models.MarketListing).filter(models.MarketListing.id == payload.listing_id).first()
     if not listing:
         raise HTTPException(status_code=400, detail="MarketListing not found")
@@ -723,8 +726,14 @@ def create_offer(payload: OfferCreatePayload, pg_db: Session = Depends(get_db)):
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be > 0")
 
-    if payload.quantity > req.quantity:
-        raise HTTPException(status_code=400, detail="Quantity exceeds buyer request quantity")
+    from sqlalchemy.sql import func
+    fulfilled_qty_val = pg_db.query(func.sum(models.Deal.quantity)).filter(
+        models.Deal.buyer_request_id == req.id,
+        models.Deal.status != "CANCELLED"
+    ).scalar() or 0.0
+
+    if payload.quantity > (req.quantity - fulfilled_qty_val):
+        raise HTTPException(status_code=400, detail="Quantity exceeds remaining buyer request capacity")
 
     if payload.quantity > listing.quantity_remaining:
         raise HTTPException(status_code=400, detail="Quantity exceeds quantity_remaining")
@@ -792,6 +801,22 @@ def update_offer_status(offer_id: int, payload: OfferStatusUpdate, pg_db: Sessio
         raise HTTPException(status_code=400, detail="Invalid status transition")
 
     if payload.status == "ACCEPTED":
+        # Lock the buyer_request row
+        req = pg_db.query(models.BuyerRequest).with_for_update().filter(models.BuyerRequest.id == offer.buyer_request_id).first()
+        if not req:
+            pg_db.rollback()
+            raise HTTPException(status_code=404, detail="Buyer request not found")
+
+        from sqlalchemy.sql import func
+        fulfilled_qty_val = pg_db.query(func.sum(models.Deal.quantity)).filter(
+            models.Deal.buyer_request_id == req.id,
+            models.Deal.status != "CANCELLED"
+        ).scalar() or 0.0
+
+        if offer.quantity > (req.quantity - fulfilled_qty_val):
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Acceptance would exceed remaining buyer request capacity")
+
         # Lock the market_listing row
         listing = pg_db.query(models.MarketListing).with_for_update().filter(models.MarketListing.id == offer.listing_id).first()
 
@@ -834,6 +859,10 @@ def update_offer_status(offer_id: int, payload: OfferStatusUpdate, pg_db: Sessio
             status="CONFIRMED"
         )
         pg_db.add(deal)
+
+        new_fulfilled = fulfilled_qty_val + offer.quantity
+        if new_fulfilled >= req.quantity:
+            req.status = "FULFILLED"
 
     offer.status = payload.status
     pg_db.commit()
@@ -896,15 +925,39 @@ def update_deal_status(deal_id: int, payload: DealStatusUpdate, pg_db: Session =
         raise HTTPException(status_code=404, detail="Deal not found")
 
     valid_transitions = {
-        "CONFIRMED": "READY_FOR_PICKUP",
-        "READY_FOR_PICKUP": "PICKED_UP",
-        "PICKED_UP": "DELIVERED",
-        "DELIVERED": "COMPLETED"
+        "CONFIRMED": ["READY_FOR_PICKUP", "CANCELLED"],
+        "READY_FOR_PICKUP": ["PICKED_UP", "CANCELLED"],
+        "PICKED_UP": ["DELIVERED"],
+        "DELIVERED": ["COMPLETED"]
     }
 
-    if deal.status not in valid_transitions or valid_transitions[deal.status] != payload.status:
+    allowed = valid_transitions.get(deal.status, [])
+    if payload.status not in allowed:
         raise HTTPException(status_code=400, detail="Invalid status transition")
 
-    deal.status = payload.status
+    if payload.status == "CANCELLED":
+        listing = pg_db.query(models.MarketListing).with_for_update().filter(models.MarketListing.id == deal.listing_id).first()
+        req = pg_db.query(models.BuyerRequest).with_for_update().filter(models.BuyerRequest.id == deal.buyer_request_id).first()
+
+        if listing:
+            listing.quantity_remaining += deal.quantity
+            if listing.status == "SOLD_OUT":
+                listing.status = "AVAILABLE"
+
+        deal.status = "CANCELLED"
+        pg_db.flush()
+
+        if req:
+            from sqlalchemy.sql import func
+            fulfilled_qty_val = pg_db.query(func.sum(models.Deal.quantity)).filter(
+                models.Deal.buyer_request_id == req.id,
+                models.Deal.status != "CANCELLED"
+            ).scalar() or 0.0
+
+            if fulfilled_qty_val < req.quantity:
+                req.status = "OPEN"
+    else:
+        deal.status = payload.status
+
     pg_db.commit()
     return {"id": deal.id, "status": deal.status}
