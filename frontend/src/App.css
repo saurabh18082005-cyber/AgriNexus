@@ -2637,6 +2637,65 @@
   margin-bottom: 14px;
 }
 
+.treatment-plan-card {
+  color: #f4f8f5;
+}
+
+.treatment-plan-card > h3,
+.treatment-plan-card h4 {
+  color: #ffffff;
+}
+
+.treatment-plan-card section span {
+  color: #c2d3c8;
+}
+
+.treatment-plan-card section b {
+  color: #f8faf9;
+}
+
+.treatment-plan-card input,
+.treatment-plan-card select {
+  color: #f8faf9;
+}
+
+.treatment-plan-card select option {
+  color: #f8faf9;
+  background: #12321f;
+}
+
+.treatment-plan-card button {
+  background: #a7f3d0 !important;
+  color: #082014 !important;
+  opacity: 1 !important;
+}
+
+.treatment-plan-card button:hover,
+.treatment-plan-card button:focus-visible {
+  background: #a7f3d0 !important;
+  color: #082014 !important;
+  opacity: 1 !important;
+}
+
+.report-actions-row .btn-primary:disabled {
+  background: #365b48;
+  color: #f4f8f5;
+  opacity: 1;
+}
+
+.treatment-plan-card input::placeholder {
+  color: #b8c9be;
+  opacity: 1;
+}
+
+.treatment-plan-card .report-prescription-box p {
+  color: #e5eee8;
+}
+
+.treatment-plan-card .treatment-weather-secondary {
+  color: #b8c9be;
+}
+
 .buyers-column-header h3 {
   font-size: 16px;
   font-weight: 850;

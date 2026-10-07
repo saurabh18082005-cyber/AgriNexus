@@ -1,0 +1,138 @@
+{
+  "Tomato___Bacterial_spot": {
+    "type": "bacterial",
+    "medicine": "Copper oxychloride 50% WP + Streptocycline",
+    "dose": 3, "dose_unit": "g", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 7,
+    "organic": "Neem oil 5 ml/L; remove infected leaves; avoid overhead watering",
+    "advice": "Remove badly infected leaves first. Do not work in the field when plants are wet. Streptocycline is used at a very low dose (about 0.1 g/L); follow the label.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Early_blight": {
+    "type": "fungal",
+    "medicine": "Mancozeb 75% WP",
+    "dose": 2.5, "dose_unit": "g", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 7,
+    "organic": "Trichoderma or neem oil 5 ml/L; remove lower infected leaves",
+    "advice": "Remove lower infected leaves and keep leaves dry.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Late_blight": {
+    "type": "fungal",
+    "medicine": "Metalaxyl + Mancozeb (e.g. Ridomil Gold MZ)",
+    "dose": 2.5, "dose_unit": "g", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 7, "wait_days": 7,
+    "organic": "Copper-based spray (organic-approved); destroy infected plants",
+    "advice": "Spreads fast in cool, wet weather. Act today and rescan sooner if rain is coming.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Leaf_Mold": {
+    "type": "fungal",
+    "medicine": "Carbendazim 12% + Mancozeb 63% WP",
+    "dose": 2, "dose_unit": "g", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 7,
+    "organic": "Neem oil 5 ml/L; improve air flow between plants",
+    "advice": "Reduce humidity: prune for airflow and avoid wetting leaves.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Septoria_leaf_spot": {
+    "type": "fungal",
+    "medicine": "Chlorothalonil 75% WP",
+    "dose": 2, "dose_unit": "g", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 7,
+    "organic": "Copper-based spray (organic-approved); remove infected leaves",
+    "advice": "Remove infected lower leaves and avoid splashing water onto leaves.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Spider_mites Two-spotted_spider_mite": {
+    "type": "pest",
+    "medicine": "Abamectin 1.9% EC",
+    "dose": 0.5, "dose_unit": "ml", "water_l_per_acre": 200,
+    "sprays": 2, "interval_days": 10, "wait_days": 7,
+    "organic": "Neem oil 5 ml/L with a little soap; spray the underside of leaves",
+    "advice": "Spray the underside of leaves, where mites live. Hot dry weather makes mites worse.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Target_Spot": {
+    "type": "fungal",
+    "medicine": "Azoxystrobin 23% SC",
+    "dose": 1, "dose_unit": "ml", "water_l_per_acre": 200,
+    "sprays": 2, "interval_days": 10, "wait_days": 5,
+    "organic": "Copper-based spray (organic-approved); remove infected leaves",
+    "advice": "Remove infected leaves and keep plants well spaced.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Tomato___Tomato_Yellow_Leaf_Curl_Virus": {
+    "type": "virus",
+    "medicine": null,
+    "advice": "No spray cures a virus. Remove and destroy infected plants. Control whiteflies (they spread it): yellow sticky traps, neem oil 5 ml/L. Ask your agri officer about a whitefly spray.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university"
+  },
+  "Tomato___Tomato_mosaic_virus": {
+    "type": "virus",
+    "medicine": null,
+    "advice": "No spray cures a virus. Remove and destroy infected plants. Wash hands and tools after touching them. Control aphids.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university"
+  },
+  "Tomato___healthy": {
+    "type": "healthy", "medicine": null,
+    "advice": "No treatment needed. Keep monitoring and rescan if symptoms appear.",
+    "verified": true, "source": ""
+  },
+  "Potato___Early_blight": {
+    "type": "fungal",
+    "medicine": "Difenoconazole 25% EC",
+    "dose": 0.5, "dose_unit": "ml", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 14,
+    "organic": "Trichoderma or neem oil 5 ml/L; remove infected leaves",
+    "advice": "Remove infected leaves and avoid overhead watering. Rotate with a different fungicide group next time to prevent resistance.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Potato___healthy": {
+    "type": "healthy", "medicine": null,
+    "advice": "No treatment needed. Keep monitoring and rescan if symptoms appear.",
+    "verified": true, "source": ""
+  },
+  "Pepper,_bell___Bacterial_spot": {
+    "type": "bacterial",
+    "medicine": "Copper hydroxide 77% WP",
+    "dose": 2, "dose_unit": "g", "water_l_per_acre": 200,
+    "sprays": 3, "interval_days": 10, "wait_days": 7,
+    "organic": "Neem oil 5 ml/L; remove infected leaves; avoid overhead watering",
+    "advice": "Remove badly infected leaves. Do not work in the field when plants are wet.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Pepper,_bell___healthy": {
+    "type": "healthy", "medicine": null,
+    "advice": "No treatment needed. Keep monitoring and rescan if symptoms appear.",
+    "verified": true, "source": ""
+  },
+  "Grape___Black_rot": {
+    "type": "fungal",
+    "medicine": "Myclobutanil 10% WP",
+    "dose": 0.5, "dose_unit": "g", "water_l_per_acre": 400,
+    "sprays": 3, "interval_days": 10, "wait_days": 14,
+    "organic": "Remove and destroy infected leaves and mummified berries; copper-based spray",
+    "advice": "Remove mummified berries and infected leaves, because they carry the disease to the next season.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Grape___healthy": {
+    "type": "healthy", "medicine": null,
+    "advice": "No treatment needed. Keep monitoring and rescan if symptoms appear.",
+    "verified": true, "source": ""
+  },
+  "Corn_(maize)___Northern_Leaf_Blight": {
+    "type": "fungal",
+    "medicine": "Propiconazole 25% EC",
+    "dose": 1, "dose_unit": "ml", "water_l_per_acre": 200,
+    "sprays": 2, "interval_days": 12, "wait_days": 14,
+    "organic": "Remove infected lower leaves; rotate crops next season",
+    "advice": "Spray when the first lesions appear. Rotate crops next season.",
+    "verified": false, "source": "DRAFT - verify with ICAR / state agri university / product label"
+  },
+  "Corn_(maize)___healthy": {
+    "type": "healthy", "medicine": null,
+    "advice": "No treatment needed. Keep monitoring and rescan if symptoms appear.",
+    "verified": true, "source": ""
+  }
+}

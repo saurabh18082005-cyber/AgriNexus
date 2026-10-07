@@ -14,6 +14,8 @@ export default function Home({
   setPage,
   openPassport,
   openMarket,
+  readyToSell,
+  readyReason,
   dashboard,
   weather,
   refreshWeather,
@@ -106,9 +108,11 @@ export default function Home({
                 type="button"
                 className="btn-outline"
                 onClick={openMarket}
+                disabled={!readyToSell}
               >
                 <span>🤝 {t.findBuyers}</span>
               </button>
+              {!readyToSell && <p>{readyReason}</p>}
             </div>
 
             {/* Real Data Stat Pills */}
