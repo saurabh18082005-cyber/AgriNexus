@@ -838,3 +838,40 @@ def update_offer_status(offer_id: int, payload: OfferStatusUpdate, pg_db: Sessio
     offer.status = payload.status
     pg_db.commit()
     return {"id": offer.id, "status": offer.status}
+
+class DealStatusUpdate(BaseModel):
+    status: str
+
+@app.get("/api/deals")
+def get_deals(pg_db: Session = Depends(get_db)):
+    deals = pg_db.query(models.Deal).order_by(models.Deal.id.desc()).all()
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    return [to_dict(d) for d in deals]
+
+@app.get("/api/deals/{deal_id}")
+def get_deal(deal_id: int, pg_db: Session = Depends(get_db)):
+    deal = pg_db.query(models.Deal).filter(models.Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return {c.name: getattr(deal, c.name) for c in deal.__table__.columns}
+
+@app.patch("/api/deals/{deal_id}/status")
+def update_deal_status(deal_id: int, payload: DealStatusUpdate, pg_db: Session = Depends(get_db)):
+    deal = pg_db.query(models.Deal).filter(models.Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    valid_transitions = {
+        "CONFIRMED": "READY_FOR_PICKUP",
+        "READY_FOR_PICKUP": "PICKED_UP",
+        "PICKED_UP": "DELIVERED",
+        "DELIVERED": "COMPLETED"
+    }
+
+    if deal.status not in valid_transitions or valid_transitions[deal.status] != payload.status:
+        raise HTTPException(status_code=400, detail="Invalid status transition")
+
+    deal.status = payload.status
+    pg_db.commit()
+    return {"id": deal.id, "status": deal.status}
