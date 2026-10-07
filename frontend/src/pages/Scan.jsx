@@ -18,6 +18,7 @@ export default function Scan({
   loading,
   result,
   openPassport,
+  onStartNewPassport,
   openMarket,
   readyToSell,
   readyReason,
@@ -251,6 +252,16 @@ export default function Scan({
                   🤝 {t.findBuyers}
                 </button>
               </div>
+              <a
+                href="#start-new-passport"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onStartNewPassport?.();
+                }}
+                style={{ fontSize: "0.875rem" }}
+              >
+                Start new passport
+              </a>
               {!readyToSell && <p>{readyReason}</p>}
             </div>
           ) : (

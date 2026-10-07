@@ -93,6 +93,7 @@ SPRAY_WEATHER_THRESHOLDS = {
 }
 SPRAY_WEATHER_CACHE_TTL = timedelta(minutes=30)
 spray_weather_cache: dict[tuple[float, float], tuple[datetime, dict[str, Any]]] = {}
+PASSPORT_GAP_DAYS = 7
 
 Base.metadata.create_all(bind=engine)
 
@@ -362,6 +363,7 @@ async def scan(
     farmer_name: str = Query("Demo Farmer"),
     crop_id: int | None = Query(None, gt=0),
     treatment_course_id: int | None = Query(None, gt=0),
+    new_passport: bool = Query(False),
     pg_db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -385,16 +387,62 @@ async def scan(
             raise HTTPException(status_code=400, detail="Treatment course does not belong to this Passport.")
         crop_id = treatment_course.crop_id
 
-    crop = None
     if crop_id is not None:
-        crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
-        if not crop:
+        requested_crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+        if not requested_crop:
             raise HTTPException(status_code=404, detail="Crop passport not found.")
-        if crop.crop_type.casefold() != crop_type.casefold():
+        if requested_crop.crop_type.casefold() != crop_type.casefold():
             raise HTTPException(status_code=400, detail="Uploaded crop does not match the selected Passport.")
-    else:
-        crop_id = ensure_crop(pg_db, crop_type, location, farmer_name)
-        crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+
+    crop = None
+    if not new_passport:
+        matching_crops = pg_db.query(models.Crop).filter(
+            models.Crop.crop_type == crop_type,
+            models.Crop.location == location,
+        ).all()
+        now = datetime.now(timezone.utc)
+        eligible_passports = []
+        for candidate in matching_crops:
+            last_scan = pg_db.query(models.Scan).filter(
+                models.Scan.crop_id == candidate.id
+            ).order_by(models.Scan.created_at.desc(), models.Scan.id.desc()).first()
+            if not last_scan or not last_scan.created_at:
+                continue
+
+            last_scan_at = last_scan.created_at
+            if last_scan_at.tzinfo is None:
+                last_scan_at = last_scan_at.replace(tzinfo=timezone.utc)
+            scan_age = now - last_scan_at
+            if scan_age < timedelta(0) or scan_age > timedelta(days=PASSPORT_GAP_DAYS):
+                continue
+
+            harvest = pg_db.query(models.Harvest).filter(
+                models.Harvest.crop_id == candidate.id
+            ).order_by(models.Harvest.id.desc()).first()
+            harvest_verified = bool(
+                harvest and (
+                    harvest.verified
+                    or (harvest.verification_status or "").upper() == "VERIFIED"
+                )
+            )
+            if not harvest_verified:
+                eligible_passports.append((last_scan_at, candidate))
+
+        if eligible_passports:
+            crop = max(eligible_passports, key=lambda item: item[0])[1]
+
+    if crop is None:
+        crop = models.Crop(
+            farmer_name=farmer_name,
+            crop_type=crop_type,
+            location=location,
+        )
+        pg_db.add(crop)
+        pg_db.flush()
+    crop_id = crop.id
+
+    if treatment_course is not None and treatment_course.crop_id != crop_id:
+        treatment_course = None
 
     new_scan = models.Scan(
         crop_id=crop_id,

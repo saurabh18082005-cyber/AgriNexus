@@ -78,6 +78,7 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState("");
   const [result, setResult] = useState(null);
+  const [startNewPassport, setStartNewPassport] = useState(false);
   const [scanContext, setScanContext] = useState(null);
   const [passportLoading, setPassportLoading] = useState(false);
   const [passportError, setPassportError] = useState("");
@@ -191,6 +192,11 @@ export default function App() {
     setPage("scan");
   };
 
+  const prepareNewPassport = () => {
+    setStartNewPassport(true);
+    setScanContext(null);
+  };
+
   const useLocation = () => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
@@ -208,6 +214,7 @@ export default function App() {
   const analyze = async () => {
     const submittedFile = file;
     const submittedScanContext = scanContext;
+    const submittedStartNewPassport = startNewPassport;
     if (!submittedFile) return;
     setResult(null);
     setLoading(true);
@@ -221,6 +228,9 @@ export default function App() {
       longitude: coords.longitude,
       location,
     });
+    if (submittedStartNewPassport) {
+      params.set("new_passport", "true");
+    }
     if (submittedScanContext?.cropId) {
       params.set("crop_id", submittedScanContext.cropId);
       if (submittedScanContext.treatmentCourseId) {
@@ -239,6 +249,7 @@ export default function App() {
         throw new Error(errorDetail);
       }
       setResult(data);
+      setStartNewPassport(false);
       await refreshDashboard();
       if (submittedScanContext) {
         setScanContext(null);
@@ -430,6 +441,7 @@ export default function App() {
             loading={loading}
             result={result}
             openPassport={openPassport}
+            onStartNewPassport={prepareNewPassport}
             openMarket={openMarket}
             readyToSell={readiness.ready}
             readyReason={readiness.reason}
