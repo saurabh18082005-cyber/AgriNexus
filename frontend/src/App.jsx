@@ -10,6 +10,8 @@ import Home from "./pages/Home";
 import Scan from "./pages/Scan";
 import Passport from "./pages/Passport";
 import Market from "./pages/Market";
+import BuyerDashboard from "./pages/BuyerDashboard";
+import DealRoom from "./pages/DealRoom";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
