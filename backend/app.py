@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from database.connection import engine, Base, get_db
 from database import models
 from PIL import Image, UnidentifiedImageError
-from treatment_routes import router as treatment_router
+from treatment_routes import get_treatment_entry, router as treatment_router
 
 try:
     from ai_edge_litert.interpreter import Interpreter
@@ -249,6 +249,17 @@ def label_parts(label: str) -> tuple[str, str]:
     return DISPLAY_NAMES.get(label, (label.split("___")[0].replace("_", " ").title(), label.split("___")[-1].replace("_", " ").title()))
 
 
+def verified_follow_up_interval(recommendation: Any, verified: bool) -> int | None:
+    if not verified or not isinstance(recommendation, dict):
+        return None
+    interval = recommendation.get("follow_up_interval_days")
+    if interval is None:
+        interval = recommendation.get("interval_days")
+    if isinstance(interval, int) and not isinstance(interval, bool) and interval > 0:
+        return interval
+    return None
+
+
 @app.get("/")
 def root() -> dict[str, Any]:
     return {"name": "AgriNexus API", "status": "running", "model_mode": MODEL_MODE, "database": "PostgreSQL"}
@@ -349,6 +360,8 @@ async def scan(
     longitude: float = Query(77.5946),
     location: str = Query("Bengaluru"),
     farmer_name: str = Query("Demo Farmer"),
+    crop_id: int | None = Query(None, gt=0),
+    treatment_course_id: int | None = Query(None, gt=0),
     pg_db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -361,7 +374,27 @@ async def scan(
     wx = get_weather(latitude, longitude)
     risk = risk_engine(label, confidence, wx["temperature"], wx["humidity"], wx["rainfall"])
 
-    crop_id = ensure_crop(pg_db, crop_type, location, farmer_name)
+    treatment_course = None
+    if treatment_course_id is not None:
+        treatment_course = pg_db.query(models.TreatmentCourse).filter(
+            models.TreatmentCourse.id == treatment_course_id
+        ).first()
+        if not treatment_course:
+            raise HTTPException(status_code=404, detail="Treatment course not found.")
+        if crop_id is not None and crop_id != treatment_course.crop_id:
+            raise HTTPException(status_code=400, detail="Treatment course does not belong to this Passport.")
+        crop_id = treatment_course.crop_id
+
+    crop = None
+    if crop_id is not None:
+        crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
+        if not crop:
+            raise HTTPException(status_code=404, detail="Crop passport not found.")
+        if crop.crop_type.casefold() != crop_type.casefold():
+            raise HTTPException(status_code=400, detail="Uploaded crop does not match the selected Passport.")
+    else:
+        crop_id = ensure_crop(pg_db, crop_type, location, farmer_name)
+        crop = pg_db.query(models.Crop).filter(models.Crop.id == crop_id).first()
 
     new_scan = models.Scan(
         crop_id=crop_id,
@@ -379,6 +412,47 @@ async def scan(
         source=model_source
     )
     pg_db.add(new_scan)
+    pg_db.flush()
+
+    if treatment_course is not None:
+        treatment_course.status = (
+            "healthy"
+            if label.rsplit("___", 1)[-1].casefold() == "healthy"
+            else "disease_detected"
+        )
+        pg_db.add(models.TreatmentCourseScan(
+            scan_id=new_scan.id,
+            treatment_course_id=treatment_course.id,
+            role="follow_up",
+        ))
+    elif label.rsplit("___", 1)[-1].casefold() != "healthy":
+        recommendation_entry = get_treatment_entry(label)
+        recommendation_verified = bool(
+            recommendation_entry and recommendation_entry.get("verified") is True
+        )
+        follow_up_interval = verified_follow_up_interval(
+            recommendation_entry,
+            recommendation_verified,
+        )
+        treatment_course = models.TreatmentCourse(
+            crop_id=crop_id,
+            disease_class=label,
+            status="under_treatment",
+            recommendation_snapshot=(
+                json.dumps(recommendation_entry, ensure_ascii=False)
+                if recommendation_entry is not None else None
+            ),
+            recommendation_verified=recommendation_verified,
+            follow_up_interval_days=follow_up_interval,
+        )
+        pg_db.add(treatment_course)
+        pg_db.flush()
+        pg_db.add(models.TreatmentCourseScan(
+            scan_id=new_scan.id,
+            treatment_course_id=treatment_course.id,
+            role="initial",
+        ))
+
     pg_db.commit()
     pg_db.refresh(new_scan)
 
@@ -395,6 +469,10 @@ async def scan(
         "weather": wx,
         "location": location,
         "created_at": new_scan.created_at,
+        "treatment_course": (
+            treatment_course_payload(pg_db, treatment_course)
+            if treatment_course is not None else None
+        ),
     }
 
 
@@ -430,8 +508,13 @@ def passport(crop_id: int, pg_db: Session = Depends(get_db)) -> dict[str, Any]:
     if not crop:
         raise HTTPException(status_code=404, detail="Crop passport not found.")
 
-    scans = pg_db.query(models.Scan).filter(models.Scan.crop_id == crop_id).order_by(models.Scan.id.desc()).all()
+    scans = pg_db.query(models.Scan).filter(
+        models.Scan.crop_id == crop_id
+    ).order_by(models.Scan.created_at.asc(), models.Scan.id.asc()).all()
     harvest = pg_db.query(models.Harvest).filter(models.Harvest.crop_id == crop_id).order_by(models.Harvest.id.desc()).first()
+    treatment_courses = pg_db.query(models.TreatmentCourse).filter(
+        models.TreatmentCourse.crop_id == crop_id
+    ).order_by(models.TreatmentCourse.id.desc()).all()
 
     def to_dict(obj):
         if not obj: return None
@@ -463,6 +546,22 @@ def passport(crop_id: int, pg_db: Session = Depends(get_db)) -> dict[str, Any]:
             "details": f"Harvest verification updated: {harvest.verification_status}"
         })
 
+    for course in treatment_courses:
+        timeline.append({
+            "event_type": "treatment_started",
+            "timestamp": course.created_at,
+            "details": f"Treatment course started for {course.disease_class}"
+        })
+        applications = pg_db.query(models.TreatmentApplication).filter(
+            models.TreatmentApplication.treatment_course_id == course.id
+        ).order_by(models.TreatmentApplication.applied_at.asc()).all()
+        for application in applications:
+            timeline.append({
+                "event_type": "treatment_application",
+                "timestamp": application.applied_at,
+                "details": "Treatment application recorded"
+            })
+
     # Sort timeline by timestamp ascending, empty last
     timeline.sort(key=lambda x: (not x["timestamp"], str(x["timestamp"] or "")))
 
@@ -470,8 +569,126 @@ def passport(crop_id: int, pg_db: Session = Depends(get_db)) -> dict[str, Any]:
         "crop": to_dict(crop),
         "scans": [to_dict(s) for s in scans],
         "harvest": to_dict(harvest),
+        "treatment_courses": [
+            treatment_course_payload(pg_db, course)
+            for course in treatment_courses
+        ],
         "timeline": timeline
     }
+
+
+def treatment_course_payload(pg_db: Session, course: models.TreatmentCourse) -> dict[str, Any]:
+    recommendation = (
+        json.loads(course.recommendation_snapshot)
+        if course.recommendation_snapshot else None
+    )
+    applications = pg_db.query(models.TreatmentApplication).filter(
+        models.TreatmentApplication.treatment_course_id == course.id
+    ).order_by(models.TreatmentApplication.applied_at.asc()).all()
+    linked_scans = pg_db.query(
+        models.TreatmentCourseScan,
+        models.Scan,
+    ).join(
+        models.Scan,
+        models.Scan.id == models.TreatmentCourseScan.scan_id,
+    ).filter(
+        models.TreatmentCourseScan.treatment_course_id == course.id
+    ).order_by(models.Scan.created_at.asc(), models.Scan.id.asc()).all()
+    latest_course_scan = linked_scans[-1][1] if linked_scans else None
+    follow_up_interval = course.follow_up_interval_days
+    if follow_up_interval is None:
+        follow_up_interval = verified_follow_up_interval(
+            recommendation,
+            course.recommendation_verified,
+        )
+    next_follow_up_at = None
+    follow_up_due = False
+    follow_up_required = bool(
+        course.status != "healthy"
+        and latest_course_scan is not None
+    )
+    if (
+        follow_up_required
+        and course.recommendation_verified
+        and isinstance(follow_up_interval, int)
+        and follow_up_interval > 0
+    ):
+        scan_time = latest_course_scan.created_at
+        if scan_time.tzinfo is None:
+            scan_time = scan_time.replace(tzinfo=timezone.utc)
+        next_follow_up_at = scan_time + timedelta(days=follow_up_interval)
+        follow_up_due = course.status != "healthy" and next_follow_up_at <= datetime.now(timezone.utc)
+
+    total_applications = None
+    if recommendation:
+        configured_total = recommendation.get("sprays")
+        if isinstance(configured_total, int) and not isinstance(configured_total, bool) and configured_total > 0:
+            total_applications = configured_total
+
+    return {
+        "id": course.id,
+        "crop_id": course.crop_id,
+        "disease_class": course.disease_class,
+        "status": course.status,
+        "recommendation_verified": course.recommendation_verified,
+        "recommendation": recommendation,
+        "follow_up_interval_days": follow_up_interval,
+        "next_follow_up_at": next_follow_up_at,
+        "follow_up_required": follow_up_required,
+        "follow_up_due": follow_up_due,
+        "total_applications": total_applications,
+        "completed_applications": len(applications),
+        "applications_complete": (
+            total_applications is not None
+            and len(applications) >= total_applications
+        ),
+        "applications": [
+            {
+                "id": application.id,
+                "applied_at": application.applied_at,
+            }
+            for application in applications
+        ],
+        "scans": [
+            {
+                "role": link.role,
+                "scan": {
+                    column.name: getattr(scan, column.name)
+                    for column in scan.__table__.columns
+                },
+            }
+            for link, scan in linked_scans
+        ],
+        "created_at": course.created_at,
+    }
+
+
+@app.post("/api/treatment-courses/{course_id}/applications")
+def record_treatment_application(course_id: int, pg_db: Session = Depends(get_db)) -> dict[str, Any]:
+    course = pg_db.query(models.TreatmentCourse).filter(
+        models.TreatmentCourse.id == course_id
+    ).with_for_update().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Treatment course not found.")
+
+    current_progress = pg_db.query(models.TreatmentApplication).filter(
+        models.TreatmentApplication.treatment_course_id == course.id
+    ).count()
+    recommendation = (
+        json.loads(course.recommendation_snapshot)
+        if course.recommendation_snapshot else None
+    )
+    total = recommendation.get("sprays") if recommendation else None
+    if not isinstance(total, int) or isinstance(total, bool) or total <= 0:
+        raise HTTPException(status_code=409, detail="The treatment application limit is unavailable.")
+    if current_progress >= total:
+        raise HTTPException(status_code=409, detail="All required applications are already recorded.")
+
+    application = models.TreatmentApplication(treatment_course_id=course.id)
+    pg_db.add(application)
+    pg_db.commit()
+    pg_db.refresh(application)
+    return treatment_course_payload(pg_db, course)
 
 
 @app.get("/api/dashboard")

@@ -10,9 +10,42 @@ export default function Passport({
   apiUrl,
   readyToSell,
   readyReason,
+  loading,
+  error,
+  onRetry,
+  onRescan,
 }) {
   const isHarvested = Boolean(passport?.harvest);
   const fillText = fill || ((text, vars) => text.replace(/\{(\w+)\}/g, (_, key) => vars[key]));
+  const treatmentCourses = passport?.treatment_courses || [];
+  const chronologicalScans = [...(passport?.scans || [])].sort((left, right) => {
+    const leftTime = new Date(left.created_at).getTime();
+    const rightTime = new Date(right.created_at).getTime();
+    const timeDifference = (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
+    return timeDifference || left.id - right.id;
+  });
+  const latestScan = chronologicalScans.at(-1) || null;
+  const latestScanIsHealthy = String(latestScan?.disease || "").toLowerCase().includes("healthy");
+  const currentTreatment = !latestScanIsHealthy && latestScan
+    ? treatmentCourses.find((course) => course.scans?.some((item) => item.scan?.id === latestScan.id)) || null
+    : null;
+  const formatWorkflowDate = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+  const followUpIntervalDays = Number(currentTreatment?.follow_up_interval_days);
+  const hasVerifiedFollowUp = Boolean(
+    currentTreatment?.follow_up_required
+    && Number.isInteger(followUpIntervalDays)
+    && followUpIntervalDays > 0
+    && currentTreatment?.next_follow_up_at
+    && formatWorkflowDate(currentTreatment.next_follow_up_at)
+  );
 
   const lifecycleStages = [
     { label: t.lifecycleSeed, icon: "🌱", active: true },
@@ -31,7 +64,17 @@ export default function Passport({
         <p>{t.passportDesc}</p>
       </div>
 
-      {passport ? (
+      {loading ? (
+        <div className="panel empty-state" role="status">
+          <h2>Loading Health Passport…</h2>
+        </div>
+      ) : error ? (
+        <div className="panel empty-state" role="alert">
+          <h2>Health Passport could not be loaded</h2>
+          <p>{error}</p>
+          <button type="button" className="btn-primary" onClick={onRetry}>Try again</button>
+        </div>
+      ) : passport ? (
         <div className="passport-split-layout">
           {/* Main Passport Digital Certificate Card */}
           <div className="passport-card-cert">
@@ -95,52 +138,143 @@ export default function Passport({
               </div>
             </div>
 
-            {/* Health & Condition Observation Timeline */}
+            {/* Latest scan and persisted treatment workflow */}
             <div className="timeline-scroller">
               <div className="timeline-header-bar">
-                <span className="eyebrow" style={{ margin: 0 }}>
-                  {t.passportAuditTrail}
-                </span>
-                <span className="scans-count-tag">
-                  {fillText(t.passportEventCount, { count: passport.scans ? passport.scans.length : 0 })}
-                </span>
+                <span className="eyebrow" style={{ margin: 0 }}>CURRENT · LATEST SCAN</span>
               </div>
 
-              {passport.scans && passport.scans.length > 0 ? (
-                passport.scans.map((scan, idx) => (
-                  <div className="timeline-node-item" key={scan.id}>
-                    <div className="timeline-dot-pin" />
-                    <div className="timeline-body">
-                      <div className="timeline-top-row">
-                        <div className="timeline-title-wrap">
-                          <span className="event-index-pill">#{String(passport.scans.length - idx).padStart(2, "0")}</span>
-                          <b>{t.diseases?.[scan.disease] || scan.disease}</b>
-                        </div>
-                        <RiskBadge level={scan.risk_level} t={t} />
-                      </div>
-                      <div className="timeline-timestamp">
-                        📅 {new Date(scan.created_at).toLocaleString()}
-                      </div>
-                      <div className="timeline-badges-wrap">
-                        <span className="timeline-meta-pill">
-                          🤖 {t.aiLabel} {scan.confidence}% {t.passportConf}
-                        </span>
-                        <span className="timeline-meta-pill">
-                          🌡️ {Math.round(scan.temperature)}°C {t.passportTemp}
-                        </span>
-                        <span className="timeline-meta-pill">
-                          💧 {Math.round(scan.humidity)}% {t.humidity}
-                        </span>
-                        <span className="timeline-meta-pill">
-                          ⚠️ {t.risk}: {scan.risk_score}%
-                        </span>
-                      </div>
+              {latestScan ? (
+                <div className="timeline-body">
+                  <div className="timeline-top-row">
+                    <div className="timeline-title-wrap">
+                      <span className="event-index-pill">{latestScanIsHealthy ? "HEALTHY" : "DISEASE DETECTED"}</span>
+                      <b>{t.diseases?.[latestScan.disease] || latestScan.disease}</b>
                     </div>
+                    <RiskBadge level={latestScan.risk_level} t={t} />
+                  </div>
+                  <div className="timeline-timestamp">
+                    📅 {new Date(latestScan.created_at).toLocaleString()}
+                  </div>
+                  <div className="timeline-badges-wrap">
+                    {latestScan.confidence != null && (
+                      <span className="timeline-meta-pill">🤖 {t.aiLabel} {latestScan.confidence}% {t.passportConf}</span>
+                    )}
+                    {latestScan.risk_score != null && (
+                      <span className="timeline-meta-pill">⚠️ {t.risk}: {latestScan.risk_score}%</span>
+                    )}
+                    {latestScan.temperature != null && (
+                      <span className="timeline-meta-pill">🌡️ {Math.round(latestScan.temperature)}°C {t.passportTemp}</span>
+                    )}
+                    {latestScan.humidity != null && (
+                      <span className="timeline-meta-pill">💧 {Math.round(latestScan.humidity)}% {t.humidity}</span>
+                    )}
+                    {latestScan.rainfall != null && (
+                      <span className="timeline-meta-pill">🌧️ {latestScan.rainfall} mm rain</span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="timeline-empty-message">
+                  <p>No completed scans are recorded for this Passport yet.</p>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => onRescan?.(null)}
+                  >
+                    Start First Scan
+                  </button>
+                </div>
+              )}
+
+              <div className="timeline-header-bar">
+                <span className="eyebrow" style={{ margin: 0 }}>NEXT · FOLLOW-UP</span>
+              </div>
+              <div className="timeline-body">
+                <div className="timeline-top-row">
+                  <b>Current status</b>
+                  <span className="event-index-pill">
+                    {!latestScan ? "AWAITING FIRST SCAN" : latestScanIsHealthy ? "HEALTHY" : currentTreatment?.status?.replaceAll("_", " ").toUpperCase() || "DISEASE DETECTED"}
+                  </span>
+                </div>
+                {latestScan ? (
+                  <div className="timeline-timestamp">
+                    Latest scan: {new Date(latestScan.created_at).toLocaleString()}
+                  </div>
+                ) : null}
+                {latestScanIsHealthy ? (
+                  <>
+                    <p>No follow-up scan is currently required.</p>
+                    <p><strong>Eligible for Harvest Verification</strong></p>
+                  </>
+                ) : currentTreatment ? (
+                  <>
+                    <p>
+                      Follow-up status: {currentTreatment.follow_up_required
+                        ? hasVerifiedFollowUp ? "Follow-up scan required" : "Follow-up required; no verified interval available"
+                        : "No follow-up information available"}
+                    </p>
+                    {currentTreatment.recommendation?.medicine && (
+                      <p>Treatment: {currentTreatment.recommendation.medicine}</p>
+                    )}
+                    {hasVerifiedFollowUp && (
+                      <>
+                        <p>
+                          Follow-up after {followUpIntervalDays} days ·{" "}
+                          {formatWorkflowDate(currentTreatment.next_follow_up_at)}
+                        </p>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => onRescan?.(currentTreatment.id)}
+                        >
+                          Re-scan Crop
+                        </button>
+                      </>
+                    )}
+                  </>
+                ) : latestScan ? (
+                  <p>No persisted treatment or follow-up course is linked to the latest scan.</p>
+                ) : (
+                  <p>Complete a scan to see the current follow-up status.</p>
+                )}
+              </div>
+
+              <div className="timeline-header-bar">
+                <span className="eyebrow" style={{ margin: 0 }}>HISTORY · TREATMENTS &amp; SPRAYS</span>
+              </div>
+              {treatmentCourses.length > 0 ? (
+                [...treatmentCourses].reverse().map((course) => (
+                  <div className="timeline-body" key={course.id}>
+                    <div className="timeline-top-row">
+                      <div className="timeline-title-wrap">
+                        <b>{t.diseases?.[course.disease_class] || course.disease_class}</b>
+                        <span className="event-index-pill">
+                          {latestScanIsHealthy ? "HISTORY" : course.status?.replaceAll("_", " ").toUpperCase()}
+                        </span>
+                      </div>
+                      {course.created_at && (
+                        <span className="timeline-timestamp">{formatWorkflowDate(course.created_at)}</span>
+                      )}
+                    </div>
+                    {course.recommendation?.medicine && (
+                      <p>Treatment: {course.recommendation.medicine}</p>
+                    )}
+                    {Array.isArray(course.applications) && course.applications.length > 0 ? (
+                      course.applications.map((application, index) => (
+                        <div className="timeline-timestamp" key={application.id}>
+                          Spray {index + 1}{course.total_applications ? ` of ${course.total_applications}` : ""} ·{" "}
+                          {new Date(application.applied_at).toLocaleString()}
+                        </div>
+                      ))
+                    ) : (
+                      <p>No spray/application records are recorded.</p>
+                    )}
                   </div>
                 ))
               ) : (
-                <div className="timeline-empty-message">
-                  <p>{t.noData}</p>
+                <div className="timeline-body">
+                  <p>No persisted treatment or spray records are available for this Passport.</p>
                 </div>
               )}
             </div>
