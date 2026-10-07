@@ -215,12 +215,9 @@ export default function App() {
       if (res.ok) {
         setBuyers(await res.json());
       }
-    } catch {
-      setBuyers([]);
-    }
+    
 
-      const res = await fetch(`${API_URL}/api/buyers?crop=${encodeURIComponent(crop)}`);
-      if (res.ok) setBuyers(await res.json());
+      
 
       const resList = await fetch(`${API_URL}/api/market/listings`);
       if (resList.ok) setListings(await resList.json());
