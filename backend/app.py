@@ -9,8 +9,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Optional
+from pydantic import BaseModel
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -338,10 +338,40 @@ def passport(crop_id: int, pg_db: Session = Depends(get_db)) -> dict[str, Any]:
         if not obj: return None
         return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
 
+    timeline = []
+    timeline.append({
+        "event_type": "crop_created",
+        "timestamp": crop.created_at,
+        "details": f"Passport created for {crop.crop_type}"
+    })
+
+    for s in scans:
+        timeline.append({
+            "event_type": "scan_recorded",
+            "timestamp": s.created_at,
+            "details": f"Scan recorded: {s.disease}"
+        })
+
+    if harvest:
+        timeline.append({
+            "event_type": "harvest_recorded",
+            "timestamp": harvest.created_at,
+            "details": f"Harvest recorded: {harvest.quantity} {harvest.unit}"
+        })
+        timeline.append({
+            "event_type": "harvest_verification",
+            "timestamp": harvest.created_at,
+            "details": f"Harvest verification updated: {harvest.verification_status}"
+        })
+
+    # Sort timeline by timestamp ascending, empty last
+    timeline.sort(key=lambda x: (not x["timestamp"], str(x["timestamp"] or "")))
+
     return {
         "crop": to_dict(crop),
         "scans": [to_dict(s) for s in scans],
-        "harvest": to_dict(harvest)
+        "harvest": to_dict(harvest),
+        "timeline": timeline
     }
 
 
@@ -457,12 +487,32 @@ def create_listing(payload: dict[str, Any], pg_db: Session = Depends(get_db)) ->
     if harvest.verification_status != "VERIFIED":
         raise HTTPException(status_code=400, detail="Only VERIFIED harvests can be listed on the market.")
 
+    ask_price = float(payload.get("ask_price_per_kg", 0.0))
+    # Parse dates if they exist, otherwise leave as None
+    ready_from_str = payload.get("ready_from")
+    ready_to_str = payload.get("ready_to")
+
+    from datetime import datetime
+    def parse_iso(dt_str):
+        if not dt_str: return None
+        try:
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    ready_from = parse_iso(ready_from_str)
+    ready_to = parse_iso(ready_to_str)
+
     listing = models.MarketListing(
         harvest_id=harvest.id,
         crop_type=harvest.crop.crop_type,
         quantity=harvest.quantity,
         unit=harvest.unit,
         quality_grade=harvest.quality_grade,
+        ask_price_per_kg=ask_price,
+        quantity_remaining=harvest.quantity,
+        ready_from=ready_from,
+        ready_to=ready_to,
         status="AVAILABLE"
     )
     pg_db.add(listing)
@@ -471,3 +521,443 @@ def create_listing(payload: dict[str, Any], pg_db: Session = Depends(get_db)) ->
 
     return {"id": listing.id, "message": "Market listing created successfully."}
 
+@app.post("/api/buyers/requests")
+def create_buyer_request(payload: dict[str, Any], pg_db: Session = Depends(get_db)) -> dict[str, Any]:
+    buyer_id = int(payload.get("buyer_id", 0))
+    if buyer_id <= 0:
+        raise HTTPException(status_code=400, detail="buyer_id is required.")
+
+    buyer = pg_db.query(models.Buyer).filter(models.Buyer.id == buyer_id).first()
+    if not buyer:
+        raise HTTPException(status_code=404, detail="Buyer not found.")
+
+    crop_type = payload.get("crop_type")
+    quantity = float(payload.get("quantity", 0))
+    if not crop_type or quantity <= 0:
+        raise HTTPException(status_code=400, detail="crop_type and positive quantity are required.")
+
+    price_min = payload.get("price_min")
+    price_max = payload.get("price_max")
+    if price_min is not None and float(price_min) < 0:
+        raise HTTPException(status_code=400, detail="price_min must be >= 0.")
+    if price_max is not None and float(price_max) < 0:
+        raise HTTPException(status_code=400, detail="price_max must be >= 0.")
+    if price_min is not None and price_max is not None and float(price_min) > float(price_max):
+        raise HTTPException(status_code=400, detail="price_min cannot be greater than price_max.")
+
+    from datetime import datetime
+    def parse_iso(dt_str):
+        if not dt_str: return None
+        try:
+            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid ISO format for date: {dt_str}")
+
+    new_req = models.BuyerRequest(
+        buyer_id=buyer.id,
+        crop_type=crop_type,
+        quantity=quantity,
+        unit=payload.get("unit", "kg"),
+        min_grade=payload.get("min_grade", "A"),
+        location=payload.get("location", ""),
+        window_start=parse_iso(payload.get("window_start")),
+        window_end=parse_iso(payload.get("window_end")),
+        price_min=float(price_min) if price_min is not None else None,
+        price_max=float(price_max) if price_max is not None else None,
+        status="OPEN",
+        expires_at=parse_iso(payload.get("expires_at"))
+    )
+    pg_db.add(new_req)
+    pg_db.commit()
+    pg_db.refresh(new_req)
+    return {"id": new_req.id, "message": "Buyer request created successfully."}
+
+@app.get("/api/buyers/requests")
+def get_buyer_requests(status: str = Query("OPEN"), pg_db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    requests = pg_db.query(models.BuyerRequest).filter(models.BuyerRequest.status == status).order_by(models.BuyerRequest.id.desc()).all()
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    return [to_dict(r) for r in requests]
+
+@app.get("/api/buyers/requests/{request_id}/match")
+def match_buyer_request(request_id: int, pg_db: Session = Depends(get_db)):
+    req = pg_db.query(models.BuyerRequest).filter(models.BuyerRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Buyer request not found.")
+
+    from sqlalchemy import func
+    # Case-insensitive crop type matching
+    listings = pg_db.query(models.MarketListing).filter(
+        func.lower(models.MarketListing.crop_type) == req.crop_type.lower()
+    ).all()
+
+    grade_map = {"A": 3, "B": 2, "C": 1}
+    req_grade_val = grade_map.get(req.min_grade.upper())
+
+    # If buyer requested an invalid grade, the match fails safely.
+    if req_grade_val is None:
+        raise HTTPException(status_code=400, detail=f"Invalid buyer request grade: {req.min_grade}")
+
+    eligible = []
+    excluded = []
+
+    for l in listings:
+        if l.status != "AVAILABLE" or l.quantity_remaining <= 0:
+            continue
+
+        harvest = l.harvest
+
+        if not harvest or harvest.verification_status != "VERIFIED":
+            farmer = harvest.crop.farmer_name if harvest and harvest.crop else "Unknown"
+            excluded.append({"listing_id": l.id, "farmer_name": farmer, "available_quantity": l.quantity_remaining, "reason": "Excluded: Harvest is not VERIFIED."})
+            continue
+
+        farmer_name = harvest.crop.farmer_name or "Unknown"
+
+        l_grade_val = grade_map.get(l.quality_grade.upper())
+        if l_grade_val is None:
+            excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": f"Excluded: Unrecognized crop quality grade '{l.quality_grade}'."})
+            continue
+
+        if l_grade_val < req_grade_val:
+            excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": f"Excluded: Grade '{l.quality_grade}' does not meet minimum '{req.min_grade}'."})
+            continue
+
+        if req.price_max is not None and l.ask_price_per_kg > req.price_max:
+            excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": f"Excluded: Asking price {l.ask_price_per_kg} exceeds maximum {req.price_max}."})
+            continue
+
+        # Invalid window check
+        if l.ready_from and l.ready_to and l.ready_from > l.ready_to:
+            excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": "Excluded: Invalid availability window (ready_from is after ready_to)."})
+            continue
+
+        # Date availability check
+        has_req_window = req.window_start or req.window_end
+        if has_req_window:
+            if not l.ready_from or not l.ready_to:
+                excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": "Excluded: Buyer requires a delivery window, but listing provides none."})
+                continue
+            # Must overlap: Listing start <= Req end AND Listing end >= Req start
+            r_start = req.window_start or datetime.min.replace(tzinfo=timezone.utc)
+            r_end = req.window_end or datetime.max.replace(tzinfo=timezone.utc)
+            if l.ready_from > r_end or l.ready_to < r_start:
+                excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": f"Excluded: Listing window ({l.ready_from.date()} to {l.ready_to.date()}) does not overlap buyer window."})
+                continue
+
+        if req.location and harvest.crop.location and req.location.lower() not in harvest.crop.location.lower():
+            excluded.append({"listing_id": l.id, "farmer_name": farmer_name, "available_quantity": l.quantity_remaining, "reason": "Excluded: Location mismatch."})
+            continue
+
+        eligible.append(l)
+
+    max_date = datetime.max.replace(tzinfo=timezone.utc)
+    # Sort: Price ASC, Quantity DESC, Grade DESC, Date Readiness ASC
+    eligible.sort(key=lambda x: (x.ask_price_per_kg, -x.quantity_remaining, -grade_map.get(x.quality_grade.upper(), 1), x.ready_from or max_date))
+
+    allocations = []
+    remaining_qty = req.quantity
+
+    for l in eligible:
+        if remaining_qty <= 0: break
+        allocate_qty = min(l.quantity_remaining, remaining_qty)
+        remaining_qty -= allocate_qty
+
+        reasons = [
+            f"₹{l.ask_price_per_kg}/kg is within maximum budget",
+            f"Grade {l.quality_grade} meets minimum '{req.min_grade}'",
+            f"Provides {allocate_qty} kg out of {l.quantity_remaining} kg available",
+            "Delivery window aligns" if (req.window_start or req.window_end) else "Immediate availability"
+        ]
+
+        allocations.append({
+            "listing_id": l.id,
+            "farmer_name": l.harvest.crop.farmer_name,
+            "allocated_quantity": allocate_qty,
+            "price_per_kg": l.ask_price_per_kg,
+            "quality_grade": l.quality_grade,
+            "location": l.harvest.crop.location,
+            "reasons": reasons
+        })
+
+    matched_qty = req.quantity - remaining_qty
+    return {
+        "request_id": req.id,
+        "crop_type": req.crop_type,
+        "requested_quantity": req.quantity,
+        "matched_quantity": matched_qty,
+        "remaining_quantity": remaining_qty,
+        "coverage_percentage": round((matched_qty / req.quantity) * 100, 1) if req.quantity > 0 else 0.0,
+        "allocations": allocations,
+        "excluded": excluded
+    }
+
+
+class OfferCreatePayload(BaseModel):
+    buyer_request_id: int
+    listing_id: int
+    quantity: float
+    price_per_kg: float
+    parent_offer_id: Optional[int] = None
+
+class OfferStatusUpdate(BaseModel):
+    status: str
+
+@app.post("/api/offers")
+def create_offer(payload: OfferCreatePayload, pg_db: Session = Depends(get_db)):
+    req = pg_db.query(models.BuyerRequest).filter(models.BuyerRequest.id == payload.buyer_request_id).first()
+    if not req:
+        raise HTTPException(status_code=400, detail="BuyerRequest not found")
+
+    if req.status == "FULFILLED":
+        raise HTTPException(status_code=400, detail="Buyer request is already FULFILLED")
+
+    listing = pg_db.query(models.MarketListing).filter(models.MarketListing.id == payload.listing_id).first()
+    if not listing:
+        raise HTTPException(status_code=400, detail="MarketListing not found")
+
+    if listing.status != "AVAILABLE":
+        raise HTTPException(status_code=400, detail="Listing is not AVAILABLE")
+
+    harvest = listing.harvest
+    if not harvest or harvest.verification_status != "VERIFIED":
+        raise HTTPException(status_code=400, detail="Linked harvest is not VERIFIED")
+
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be > 0")
+
+    from sqlalchemy.sql import func
+    fulfilled_qty_val = pg_db.query(func.sum(models.Deal.quantity)).filter(
+        models.Deal.buyer_request_id == req.id,
+        models.Deal.status != "CANCELLED"
+    ).scalar() or 0.0
+
+    if payload.quantity > (req.quantity - fulfilled_qty_val):
+        raise HTTPException(status_code=400, detail="Quantity exceeds remaining buyer request capacity")
+
+    if payload.quantity > listing.quantity_remaining:
+        raise HTTPException(status_code=400, detail="Quantity exceeds quantity_remaining")
+
+    if payload.price_per_kg < 0:
+        raise HTTPException(status_code=400, detail="Price cannot be negative")
+
+    counter_count = 0
+
+    if payload.parent_offer_id:
+        parent = pg_db.query(models.Offer).filter(models.Offer.id == payload.parent_offer_id).first()
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent offer not found")
+        if parent.buyer_request_id != payload.buyer_request_id or parent.listing_id != payload.listing_id:
+            raise HTTPException(status_code=400, detail="Parent offer must belong to the same request and listing")
+        if parent.status != "PENDING":
+            raise HTTPException(status_code=400, detail="Parent offer must be PENDING")
+        if parent.counter_count >= 1:
+            raise HTTPException(status_code=400, detail="Only one counter round is allowed")
+
+        counter_count = parent.counter_count + 1
+        parent.status = "COUNTERED"
+    else:
+        if req.price_max is not None and payload.price_per_kg > req.price_max:
+            raise HTTPException(status_code=400, detail="Price exceeds buyer maximum")
+
+    new_offer = models.Offer(
+        buyer_request_id=payload.buyer_request_id,
+        listing_id=payload.listing_id,
+        quantity=payload.quantity,
+        price_per_kg=payload.price_per_kg,
+        status="PENDING",
+        parent_offer_id=payload.parent_offer_id,
+        counter_count=counter_count
+    )
+    pg_db.add(new_offer)
+    pg_db.commit()
+    pg_db.refresh(new_offer)
+
+    return {"id": new_offer.id, "status": new_offer.status}
+
+@app.get("/api/offers")
+def get_offers(buyer_request_id: Optional[int] = None, listing_id: Optional[int] = None, pg_db: Session = Depends(get_db)):
+    query = pg_db.query(models.Offer)
+    if buyer_request_id is not None:
+        query = query.filter(models.Offer.buyer_request_id == buyer_request_id)
+    if listing_id is not None:
+        query = query.filter(models.Offer.listing_id == listing_id)
+
+    offers = query.order_by(models.Offer.id.desc()).all()
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    return [to_dict(o) for o in offers]
+
+@app.patch("/api/offers/{offer_id}/status")
+def update_offer_status(offer_id: int, payload: OfferStatusUpdate, pg_db: Session = Depends(get_db)):
+    offer = pg_db.query(models.Offer).filter(models.Offer.id == offer_id).first()
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    if offer.status != "PENDING":
+        raise HTTPException(status_code=400, detail="Only PENDING offers can be updated")
+
+    if payload.status not in ["ACCEPTED", "REJECTED"]:
+        raise HTTPException(status_code=400, detail="Invalid status transition")
+
+    if payload.status == "ACCEPTED":
+        # Lock the buyer_request row
+        req = pg_db.query(models.BuyerRequest).with_for_update().filter(models.BuyerRequest.id == offer.buyer_request_id).first()
+        if not req:
+            pg_db.rollback()
+            raise HTTPException(status_code=404, detail="Buyer request not found")
+
+        from sqlalchemy.sql import func
+        fulfilled_qty_val = pg_db.query(func.sum(models.Deal.quantity)).filter(
+            models.Deal.buyer_request_id == req.id,
+            models.Deal.status != "CANCELLED"
+        ).scalar() or 0.0
+
+        if offer.quantity > (req.quantity - fulfilled_qty_val):
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Acceptance would exceed remaining buyer request capacity")
+
+        # Lock the market_listing row
+        listing = pg_db.query(models.MarketListing).with_for_update().filter(models.MarketListing.id == offer.listing_id).first()
+
+        if not listing:
+            pg_db.rollback()
+            raise HTTPException(status_code=404, detail="Listing not found")
+
+        if listing.status != "AVAILABLE":
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Listing is no longer AVAILABLE")
+
+        harvest = listing.harvest
+        if not harvest or harvest.verification_status != "VERIFIED":
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Linked harvest is not VERIFIED")
+
+        if offer.quantity <= 0:
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Offer quantity must be > 0")
+
+        if offer.quantity > listing.quantity_remaining:
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Offer quantity exceeds listing remaining quantity")
+
+        existing_deal = pg_db.query(models.Deal).filter(models.Deal.offer_id == offer_id).first()
+        if existing_deal:
+            pg_db.rollback()
+            raise HTTPException(status_code=400, detail="Deal already exists for this offer")
+
+        listing.quantity_remaining -= offer.quantity
+        if listing.quantity_remaining <= 0:
+            listing.status = "SOLD_OUT"
+
+        deal = models.Deal(
+            offer_id=offer.id,
+            buyer_request_id=offer.buyer_request_id,
+            listing_id=offer.listing_id,
+            quantity=offer.quantity,
+            price_per_kg=offer.price_per_kg,
+            status="CONFIRMED"
+        )
+        pg_db.add(deal)
+
+        new_fulfilled = fulfilled_qty_val + offer.quantity
+        if new_fulfilled >= req.quantity:
+            req.status = "FULFILLED"
+
+    offer.status = payload.status
+    pg_db.commit()
+    return {"id": offer.id, "status": offer.status}
+
+class DealStatusUpdate(BaseModel):
+    status: str
+
+@app.get("/api/deals")
+def get_deals(pg_db: Session = Depends(get_db)):
+    deals = pg_db.query(models.Deal).order_by(models.Deal.id.desc()).all()
+    def to_dict(obj):
+        return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+    return [to_dict(d) for d in deals]
+
+@app.get("/api/deals/{deal_id}")
+def get_deal(deal_id: int, pg_db: Session = Depends(get_db)):
+    deal = pg_db.query(models.Deal).filter(models.Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    buyer = deal.buyer_request.buyer
+    listing = deal.listing
+    crop = listing.harvest.crop
+    request = deal.buyer_request
+
+    result = {c.name: getattr(deal, c.name) for c in deal.__table__.columns}
+
+    result["buyer"] = {
+        "id": buyer.id,
+        "name": buyer.name,
+        "location": buyer.location
+    }
+
+    result["farmer"] = {
+        "name": crop.farmer_name,
+        "location": crop.location
+    }
+
+    result["crop"] = {
+        "id": crop.id,
+        "crop_type": crop.crop_type,
+        "variety": crop.variety,
+        "quality_grade": listing.quality_grade
+    }
+
+    result["timeline"] = {
+        "buyer_window_start": request.window_start.isoformat() if request.window_start else None,
+        "buyer_window_end": request.window_end.isoformat() if request.window_end else None,
+        "ready_from": listing.ready_from.isoformat() if listing.ready_from else None,
+        "ready_to": listing.ready_to.isoformat() if listing.ready_to else None
+    }
+
+    return result
+
+@app.patch("/api/deals/{deal_id}/status")
+def update_deal_status(deal_id: int, payload: DealStatusUpdate, pg_db: Session = Depends(get_db)):
+    deal = pg_db.query(models.Deal).filter(models.Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    valid_transitions = {
+        "CONFIRMED": ["READY_FOR_PICKUP", "CANCELLED"],
+        "READY_FOR_PICKUP": ["PICKED_UP", "CANCELLED"],
+        "PICKED_UP": ["DELIVERED"],
+        "DELIVERED": ["COMPLETED"]
+    }
+
+    allowed = valid_transitions.get(deal.status, [])
+    if payload.status not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid status transition")
+
+    if payload.status == "CANCELLED":
+        listing = pg_db.query(models.MarketListing).with_for_update().filter(models.MarketListing.id == deal.listing_id).first()
+        req = pg_db.query(models.BuyerRequest).with_for_update().filter(models.BuyerRequest.id == deal.buyer_request_id).first()
+
+        if listing:
+            listing.quantity_remaining += deal.quantity
+            if listing.status == "SOLD_OUT":
+                listing.status = "AVAILABLE"
+
+        deal.status = "CANCELLED"
+        pg_db.flush()
+
+        if req:
+            from sqlalchemy.sql import func
+            fulfilled_qty_val = pg_db.query(func.sum(models.Deal.quantity)).filter(
+                models.Deal.buyer_request_id == req.id,
+                models.Deal.status != "CANCELLED"
+            ).scalar() or 0.0
+
+            if fulfilled_qty_val < req.quantity:
+                req.status = "OPEN"
+    else:
+        deal.status = payload.status
+
+    pg_db.commit()
+    return {"id": deal.id, "status": deal.status}
