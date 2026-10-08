@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, Float, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .connection import Base
@@ -42,6 +42,34 @@ class Scan(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     crop = relationship("Crop", back_populates="scans")
+
+class TreatmentCourse(Base):
+    __tablename__ = "treatment_courses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    crop_id = Column(Integer, ForeignKey("crops.id"), nullable=False, index=True)
+    disease_class = Column(String, nullable=False)
+    status = Column(String, nullable=False, default="under_treatment", index=True)
+    recommendation_snapshot = Column(Text, nullable=True)
+    recommendation_verified = Column(Boolean, nullable=False, default=False)
+    follow_up_interval_days = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class TreatmentCourseScan(Base):
+    __tablename__ = "treatment_course_scans"
+
+    scan_id = Column(Integer, ForeignKey("scans.id"), primary_key=True)
+    treatment_course_id = Column(Integer, ForeignKey("treatment_courses.id"), nullable=False, index=True)
+    role = Column(String, nullable=False)
+    linked_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class TreatmentApplication(Base):
+    __tablename__ = "treatment_applications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    treatment_course_id = Column(Integer, ForeignKey("treatment_courses.id"), nullable=False, index=True)
+    applied_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Harvest(Base):
     __tablename__ = "harvests"

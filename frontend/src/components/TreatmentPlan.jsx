@@ -22,7 +22,7 @@ const fieldControlStyle = {
   color: "inherit",
 };
 
-export default function TreatmentPlan({ diseaseClass, cropId, location, coords, recommendation, scanDate, onRescan, apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000" }) {
+export default function TreatmentPlan({ diseaseClass, location, coords, recommendation, treatmentCourse, onRescan, onTreatmentCourseUpdate, apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000" }) {
   const [area, setArea] = useState("1");
   const [unit, setUnit] = useState("acre");
   const [plan, setPlan] = useState(null);
@@ -31,46 +31,8 @@ export default function TreatmentPlan({ diseaseClass, cropId, location, coords, 
   const [weatherForecast, setWeatherForecast] = useState(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState("");
-  const [sprayDates, setSprayDates] = useState([]);
-  const [sprayStorageError, setSprayStorageError] = useState("");
-
-  useEffect(() => {
-    if (!cropId || !diseaseClass) {
-      setSprayDates([]);
-      return;
-    }
-    const keyPrefix = `agrinexus-treatment-${cropId}-`;
-    const diseaseSuffix = `-${diseaseClass}`;
-    const datesByTime = new Map();
-    let readError = "";
-    try {
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
-        if (!key?.startsWith(keyPrefix) || !key.endsWith(diseaseSuffix)) continue;
-        try {
-          const data = JSON.parse(localStorage.getItem(key));
-          const dates = Array.isArray(data?.sprayedDates)
-            ? data.sprayedDates
-            : (data?.sprayedOn ? [data.sprayedOn] : []);
-          for (const value of dates) {
-            if (value == null || value === "") continue;
-            const date = new Date(value);
-            if (!Number.isNaN(date.getTime())) datesByTime.set(date.getTime(), date.toISOString());
-          }
-        } catch (error) {
-          console.warn(`Could not read saved spray history: ${key}`, error);
-          readError = "Some saved spray history could not be read.";
-        }
-      }
-    } catch (error) {
-      console.error("Could not access saved spray history.", error);
-      setSprayDates([]);
-      setSprayStorageError("Saved spray history is unavailable in this browser.");
-      return;
-    }
-    setSprayDates([...datesByTime.values()].sort((left, right) => Date.parse(left) - Date.parse(right)));
-    setSprayStorageError(readError);
-  }, [cropId, diseaseClass]);
+  const [applicationBusy, setApplicationBusy] = useState(false);
+  const [applicationError, setApplicationError] = useState("");
 
   useEffect(() => {
     if (!diseaseClass || !(Number(area) > 0)) return;
@@ -152,17 +114,16 @@ export default function TreatmentPlan({ diseaseClass, cropId, location, coords, 
             ? `Conditions are not favorable. Best available window: ${windowLabel}.`
             : "";
   const validInterval = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
-  const totalSprays = Number.isInteger(Number(plan?.sprays)) && Number(plan?.sprays) > 0
-    ? Number(plan.sprays)
+  const totalSprays = treatmentCourse?.total_applications ?? null;
+  const completedSprays = treatmentCourse?.completed_applications ?? 0;
+  const applicationCountExceedsLimit = totalSprays != null && completedSprays > totalSprays;
+  const latestApplication = treatmentCourse?.applications?.at(-1);
+  const lastSprayDate = latestApplication?.applied_at ? new Date(latestApplication.applied_at) : null;
+  const nextSprayDate = plan?.verified === true && lastSprayDate && validInterval(plan?.interval_days)
+    ? new Date(new Date(lastSprayDate).setDate(lastSprayDate.getDate() + Number(plan.interval_days)))
     : null;
-  const completedSprays = sprayDates.length;
-  const lastSprayDate = completedSprays ? new Date(sprayDates[completedSprays - 1]) : null;
-  const nextSprayDate = lastSprayDate && validInterval(plan?.interval_days)
-    ? new Date(lastSprayDate.getTime()).setDate(lastSprayDate.getDate() + Number(plan.interval_days))
-    : null;
-  const followUpInterval = plan?.follow_up_interval_days;
-  const nextFollowUpDate = lastSprayDate && validInterval(followUpInterval)
-    ? new Date(lastSprayDate.getTime()).setDate(lastSprayDate.getDate() + Number(followUpInterval))
+  const followUpDate = treatmentCourse?.next_follow_up_at
+    ? new Date(treatmentCourse.next_follow_up_at)
     : null;
   const formatDate = (date) => date.toLocaleDateString("en-GB", {
     weekday: "short",
@@ -184,25 +145,21 @@ export default function TreatmentPlan({ diseaseClass, cropId, location, coords, 
 
   if (!diseaseClass) return null;
 
-  const recordNextSpray = () => {
-    if (!totalSprays || completedSprays >= totalSprays || !cropId) return;
-    const updatedDates = [...sprayDates, new Date().toISOString()];
-    const storageKey = `agrinexus-treatment-${cropId}-${diseaseClass}`;
+  const recordNextSpray = async () => {
+    if (!treatmentCourse?.id || applicationBusy) return;
+    setApplicationBusy(true);
+    setApplicationError("");
     try {
-      const saved = localStorage.getItem(storageKey);
-      const previousData = saved ? JSON.parse(saved) : {};
-      if (!previousData || typeof previousData !== "object" || Array.isArray(previousData)) {
-        throw new Error("Saved spray data has an invalid format.");
-      }
-      localStorage.setItem(storageKey, JSON.stringify({
-        ...previousData,
-        sprayedDates: updatedDates,
-      }));
-      setSprayDates(updatedDates);
-      setSprayStorageError("");
+      const response = await fetch(`${apiUrl}/api/treatment-courses/${treatmentCourse.id}/applications`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Could not record treatment application.");
+      onTreatmentCourseUpdate?.(data);
     } catch (error) {
-      console.error("Could not save spray progress.", error);
-      setSprayStorageError("Spray progress could not be saved. Check browser storage and try again.");
+      setApplicationError(error.message);
+    } finally {
+      setApplicationBusy(false);
     }
   };
 
@@ -320,26 +277,45 @@ export default function TreatmentPlan({ diseaseClass, cropId, location, coords, 
             </div>
           )}
           {plan.interval_days != null && <div style={row}><span>Gap between sprays</span><b>{plan.interval_days} days</b></div>}
-          {totalSprays != null && (
+          {applicationCountExceedsLimit ? (
+            <>
+              <div style={row}>
+                <span>Recorded applications</span>
+                <b>{completedSprays}</b>
+              </div>
+              <p role="alert">Recorded applications exceed the stored recommendation limit of {totalSprays}.</p>
+            </>
+          ) : totalSprays != null ? (
             <div style={row}>
               <span>Treatment progress</span>
               <b>Spray {completedSprays} of {totalSprays} done</b>
+            </div>
+          ) : null}
+          {treatmentCourse?.applications_complete && <p>All required applications completed.</p>}
+          {totalSprays == null && completedSprays > 0 && (
+            <div style={row}>
+              <span>Recorded applications</span>
+              <b>{completedSprays}</b>
             </div>
           )}
           {nextSprayDate && (
             <div style={row}>
               <span>Next spray</span>
-              <b>{formatDate(new Date(nextSprayDate))}</b>
+              <b>{formatDate(nextSprayDate)}</b>
             </div>
           )}
-          {sprayStorageError && <p role="alert" style={{ margin: "6px 0", color: "#f8faf9" }}>{sprayStorageError}</p>}
-          {totalSprays != null && completedSprays < totalSprays && (
+          {applicationError && <p role="alert" style={{ margin: "6px 0", color: "#f8faf9" }}>{applicationError}</p>}
+          {treatmentCourse
+            && totalSprays != null
+            && completedSprays < totalSprays
+            && treatmentCourse.status !== "healthy" && (
             <button
               type="button"
               onClick={recordNextSpray}
+              disabled={applicationBusy}
               style={{ marginTop: 8, padding: "10px 14px", borderRadius: 10, width: "100%" }}
             >
-              I did the next spray
+              {applicationBusy ? "Saving application..." : "I did the next spray"}
             </button>
           )}
         </section>
@@ -347,16 +323,25 @@ export default function TreatmentPlan({ diseaseClass, cropId, location, coords, 
 
       <section style={{ marginTop: 14 }}>
         <h4 style={{ margin: "0 0 6px" }}>Follow-up</h4>
-        {nextFollowUpDate
-          ? <div style={row}><span>Rescan on {formatDate(new Date(nextFollowUpDate))}</span><b>({formatCountdown(new Date(nextFollowUpDate))})</b></div>
-          : <p style={{ margin: "0 0 8px" }}>Rescan date unavailable until a verified follow-up interval is provided.</p>}
-        <button
-          type="button"
-          onClick={onRescan}
-          style={{ marginTop: 4, padding: "10px 14px", borderRadius: 10, width: "100%" }}
-        >
-          Re-scan Crop
-        </button>
+        {treatmentCourse?.status === "healthy" || diseaseClass.toLowerCase().includes("healthy") ? (
+          <p style={{ margin: "0 0 8px" }}>No follow-up scan is currently required.</p>
+        ) : treatmentCourse?.follow_up_required && followUpDate && !Number.isNaN(followUpDate.getTime()) ? (
+          <>
+            <div style={row}>
+              <span>Scan after {treatmentCourse.follow_up_interval_days} days — {formatDate(followUpDate)}</span>
+              <b>({formatCountdown(followUpDate)})</b>
+            </div>
+            <button
+              type="button"
+              onClick={onRescan}
+              style={{ marginTop: 4, padding: "10px 14px", borderRadius: 10, width: "100%" }}
+            >
+              Re-scan Crop
+            </button>
+          </>
+        ) : (
+          <p style={{ margin: "0 0 8px" }}>No verified follow-up interval is available.</p>
+        )}
       </section>
 
       {plan?.medicine && (
