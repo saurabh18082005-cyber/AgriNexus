@@ -3,13 +3,13 @@ import { useMemo, useState } from "react";
 /* ------------------------------------------------------------------
    1. SETTINGS - change these numbers, nothing else needs touching
 ------------------------------------------------------------------- */
-const REQUIRED_HEALTHY_SCANS = 2;   // confirmed healthy scans in a row before "ready to sell"
+const REQUIRED_HEALTHY_SCANS = 1;   // confirmed healthy scans in a row before "ready to sell"
 const MIN_HEALTHY_CONFIDENCE = 70;  // a "Healthy" scan below this AI confidence does not count
 const IMPROVE_BY = 5;               // risk must drop by at least this many points to count as "improving"
 const DEFAULT_PLAN = { medicine: "", dose: "", intervalDays: 3, totalSprays: 3, waitDays: 7 };
+// waitDays = days to wait after the last spray before harvest. Set to 0 in TREATMENTS if you want a quick demo.
 
-// disease name (lowercase words) -> plan. Fill from ICAR / your agri university.
-// Better: pass the getTreatment prop (same lookup your Scan Crop screen uses). This table is only a fallback.
+// Fallback only. Best: pass the getTreatment prop (the same lookup your Treatment Plan uses).
 const TREATMENTS = {
   "bacterial spot": { medicine: "Copper hydroxide 77% WP", dose: "2 g per litre of water", intervalDays: 3, totalSprays: 3, waitDays: 7 },
   "early blight": { ...DEFAULT_PLAN },
@@ -36,7 +36,7 @@ const confirmedHealthy = (scan) => isHealthy(scan) && Number(scan.confidence) >=
 export function planFor(disease, getTreatment) {
   const n = normalize(disease);
   const key = Object.keys(TREATMENTS).find((k) => n.includes(k));
-  const base = key ? TREATMENTS[key] : DEFAULT_PLAN; // never "no interval available"
+  const base = key ? TREATMENTS[key] : DEFAULT_PLAN;
   const external = getTreatment ? getTreatment(disease) || {} : {};
   return { ...base, ...external };
 }
@@ -53,19 +53,24 @@ const dueText = (due, now) => {
   return `Overdue by ${-d} day${-d > 1 ? "s" : ""}`;
 };
 
+// Which visit does a spray belong to? The latest visit at or before the spray.
+// A spray with no earlier visit (for example a date-only value) goes to visit 1.
+function sprayVisitIndex(visits, sp) {
+  let idx = 0;
+  visits.forEach((v, i) => {
+    if (new Date(v.scannedAt) <= new Date(sp.date)) idx = i;
+  });
+  return idx;
+}
+
 // One row per visit: used by both the summary table and the detail cards
 export function visitRows(visits, sprays = [], getTreatment) {
   return visits.map((v, i) => {
     const prev = visits[i - 1];
-    const next = visits[i + 1];
     const sick = !isHealthy(v);
     const diff = prev ? Math.round(v.risk - prev.risk) : 0;
     const t = { ...planFor(v.disease, getTreatment), ...(v.treatment || {}) };
-    const sprayList = sprays.filter(
-      (sp) =>
-        new Date(sp.date) >= new Date(v.scannedAt) &&
-        (!next || new Date(sp.date) < new Date(next.scannedAt))
-    );
+    const sprayList = sprays.filter((sp) => sprayVisitIndex(visits, sp) === i);
     let result, tone;
     if (!sick) {
       result = confirmedHealthy(v) ? "Healthy" : "Healthy, low confidence";
@@ -87,6 +92,7 @@ export function visitRows(visits, sprays = [], getTreatment) {
   });
 }
 
+// IMPORTANT: pass only the scans and sprays of ONE passport.
 export function buildPassportState(scans, sprays = [], getTreatment, now = new Date()) {
   const visits = [...scans].sort((a, b) => new Date(a.scannedAt) - new Date(b.scannedAt));
   const latest = visits[visits.length - 1];
@@ -96,9 +102,7 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
   const lastSick = [...visits].reverse().find((v) => !isHealthy(v));
   const plan = planFor((lastSick || latest).disease, getTreatment);
 
-  const courseSprays = [...sprays]
-    .filter((sp) => new Date(sp.date) >= new Date(caseStart.scannedAt))
-    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const courseSprays = [...sprays].sort((a, b) => new Date(a.date) - new Date(b.date));
   const lastSpray = courseSprays[courseSprays.length - 1];
   const spraysDone = Math.min(courseSprays.length, plan.totalSprays); // never "8 of 3"
   const waitUntil = lastSpray ? addDays(lastSpray.date, plan.waitDays) : null;
@@ -111,37 +115,37 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
   const delta = prev ? Math.round(latest.risk - prev.risk) : 0;
   const healthyNow = isHealthy(latest);
   const confirmed = confirmedHealthy(latest);
-  const eligible = confirmed && streak >= REQUIRED_HEALTHY_SCANS && waitOver;
+  const cleared = confirmed && streak >= REQUIRED_HEALTHY_SCANS; // crop is healthy
+  const eligible = cleared && waitOver;                          // healthy and safe to harvest
+  const healthyHold = cleared && !waitOver;                      // healthy, only waiting for safe-to-harvest date
 
   let status;
   if (eligible) status = "Cleared: ready to sell";
   else if (healthyNow && !confirmed) status = "Looks healthy, but AI confidence is low. Re-scan to confirm.";
-  else if (healthyNow && streak < REQUIRED_HEALTHY_SCANS)
-    status = `Recovering: ${streak} of ${REQUIRED_HEALTHY_SCANS} healthy scans`;
-  else if (healthyNow) status = `Healthy. Safe-to-harvest wait ends ${fmtDate(waitUntil)}`;
+  else if (healthyHold) status = `Healthy. Ready to harvest after ${fmtDate(waitUntil)}`;
+  else if (healthyNow) status = `Recovering: ${streak} of ${REQUIRED_HEALTHY_SCANS} healthy scans`;
   else if (!prev) status = "Under treatment";
   else if (isHealthy(prev)) status = "Disease came back";
   else if (delta <= -IMPROVE_BY) status = "Improving";
   else status = "Not improving";
 
-  const followUpDue = eligible
-    ? null
-    : healthyNow && streak >= REQUIRED_HEALTHY_SCANS && !waitOver
-    ? waitUntil
-    : addDays(latest.scannedAt, plan.intervalDays);
-
-  const nextSpray =
-    !healthyNow && courseSprays.length < plan.totalSprays
-      ? {
-          no: courseSprays.length + 1,
+  // ONE next-visit date: the next scan and the next spray happen on the same day.
+  const baseDate =
+    lastSpray && new Date(lastSpray.date) > new Date(latest.scannedAt) ? lastSpray.date : latest.scannedAt;
+  const needsSprays = !healthyNow && courseSprays.length < plan.totalSprays;
+  const nextVisit =
+    eligible || healthyHold
+      ? null
+      : {
+          date: addDays(baseDate, plan.intervalDays),
+          sprayNo: needsSprays ? courseSprays.length + 1 : null,
           total: plan.totalSprays,
-          date: lastSpray ? addDays(lastSpray.date, plan.intervalDays) : latest.scannedAt,
-        }
-      : null;
+        };
+  const sprayNow = !healthyNow && courseSprays.length === 0; // first spray: do it today
 
   return {
-    visits, latest, caseStart, lastSick, plan, streak, delta, status, eligible,
-    followUpDue, nextSpray, courseSprays, spraysDone, waitUntil,
+    visits, latest, caseStart, lastSick, plan, streak, delta, status,
+    eligible, healthyHold, sprayNow, nextVisit, courseSprays, spraysDone, waitUntil,
     daysToRecover: daysBetween(caseStart.scannedAt, latest.scannedAt),
     reason: eligible
       ? ""
@@ -149,8 +153,6 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
       ? "The latest scan still shows disease. Finish the sprays and re-scan."
       : !confirmed
       ? "The healthy scan has low AI confidence. Re-scan to confirm."
-      : streak < REQUIRED_HEALTHY_SCANS
-      ? `Needs ${REQUIRED_HEALTHY_SCANS} healthy scans in a row (${streak} so far).`
       : `Safe-to-harvest wait ends ${fmtDate(waitUntil)}.`,
   };
 }
@@ -160,7 +162,7 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
    scans:  [{ id, disease, confidence, risk, temp, humidity, rain, scannedAt, treatment? }]
    sprays: [{ id, disease, sprayNo, totalSprays, date }]
    getTreatment (optional): (disease) => ({ medicine, dose, intervalDays, totalSprays, waitDays })
-   IMPORTANT: pass only the scans and sprays of ONE passport.
+   onNewPassport (optional): shows a "Scan a new crop" button once this passport is complete.
 ------------------------------------------------------------------- */
 const Stat = ({ label, value }) => (
   <div className="hp-stat">
@@ -178,6 +180,7 @@ export default function HealthPassport({
   sprays = [],
   getTreatment,
   onRescan = () => {},
+  onNewPassport,
   onVerifyHarvest = () => {},
   showHeader = true,
   showHarvestPanel = true,
@@ -225,16 +228,16 @@ export default function HealthPassport({
                 <Stat label="Sprays" value={`${s.spraysDone} of ${s.plan.totalSprays}`} />
               </div>
 
-              {/* 2. READY TO SELL or NEXT SCAN */}
+              {/* 2. READY TO SELL / HEALTHY HOLD / NEXT VISIT */}
               {s.eligible ? (
                 <div className="hp-clear">
-                  <h3>Healthy. Ready to sell</h3>
+                  <h3>Crop is healthy. Ready to sell</h3>
                   <p className="hp-muted">
-                    Verified by {s.streak} healthy scans in a row, and the safe-to-harvest wait is over.
+                    No more scans are needed. This passport is complete. A new scan starts a new passport.
                   </p>
                   <div className="hp-sumgrid">
                     <Stat label="Disease treated" value={s.lastSick ? prettyDisease(s.lastSick.disease) : "None"} />
-                    <Stat label="Medicine used" value={s.plan.medicine || "As advised"} />
+                    <Stat label="Medicine used" value={s.lastSick ? s.plan.medicine || "Not available" : "None needed"} />
                     <Stat label="First scan" value={fmtDate(s.caseStart.scannedAt)} />
                     <Stat label="Cleared on" value={fmtDate(s.latest.scannedAt)} />
                     <Stat label="Days to recover" value={s.daysToRecover} />
@@ -242,24 +245,38 @@ export default function HealthPassport({
                     <Stat label="Risk" value={`${s.caseStart.risk}% → ${s.latest.risk}%`} />
                     <Stat label="Sprays done" value={`${s.spraysDone} of ${s.plan.totalSprays}`} />
                   </div>
+                  {onNewPassport && (
+                    <button className="hp-btn hp-top" onClick={onNewPassport}>+ Scan a new crop</button>
+                  )}
+                </div>
+              ) : s.healthyHold ? (
+                <div className="hp-clear">
+                  <h3>Crop is healthy. No scan needed</h3>
+                  <p className="hp-muted">
+                    Ready to harvest after {fmtDate(s.waitUntil)}. That is the safe wait after the last spray.
+                  </p>
                 </div>
               ) : (
                 <div className="hp-follow">
-                  <h3>Next scan</h3>
+                  <h3>Next visit</h3>
+                  {s.sprayNow && (
+                    <div className="hp-todo">
+                      Today: Spray 1 of {s.plan.totalSprays}
+                      {s.plan.medicine ? ` · ${s.plan.medicine}` : ""}
+                      {s.plan.dose ? ` · ${s.plan.dose}` : ""}
+                    </div>
+                  )}
                   <div className="hp-follow-row">
                     <div>
-                      <div className="hp-big">{fmtDate(s.followUpDue)}</div>
-                      <div className="hp-muted">{dueText(s.followUpDue, now)}</div>
-                      <div className="hp-muted">Scan again {s.plan.intervalDays} days after the last scan</div>
+                      <div className="hp-big">{fmtDate(s.nextVisit.date)}</div>
+                      <div className="hp-muted">{dueText(s.nextVisit.date, now)}</div>
+                      <div className="hp-muted">
+                        {s.nextVisit.sprayNo
+                          ? `Scan the crop and apply Spray ${s.nextVisit.sprayNo} of ${s.nextVisit.total}`
+                          : "Scan the crop to check recovery"}
+                      </div>
                     </div>
                     <button className="hp-btn" onClick={onRescan}>↻ Scan crop now</button>
-                    {s.nextSpray && (
-                      <div className="hp-upcoming">
-                        <small>Next spray</small>
-                        <div className="hp-big">{fmtDate(s.nextSpray.date)}</div>
-                        <div className="hp-muted">Spray {s.nextSpray.no} of {s.nextSpray.total}</div>
-                      </div>
-                    )}
                   </div>
                 </div>
               )}
@@ -283,7 +300,7 @@ export default function HealthPassport({
                         <td>{fmtDate(r.v.scannedAt)}</td>
                         <td>{prettyDisease(r.v.disease)}</td>
                         <td>
-                          {r.sick ? r.t.medicine || "Not specified" : "None needed"}
+                          {r.sick ? r.t.medicine || "Not available" : "None needed"}
                           {r.sick && r.t.dose && <div className="hp-muted">{r.t.dose}</div>}
                         </td>
                         <td>
@@ -339,12 +356,8 @@ export default function HealthPassport({
 
                           {sick ? (
                             <div className="hp-rx">
-                              <div><small>Medicine</small> {t.medicine || "Confirm with your local agri officer"}</div>
+                              <div><small>Medicine</small> {t.medicine || "Not available"}</div>
                               {t.dose && <div><small>Dose</small> {t.dose}</div>}
-                              <div>
-                                <small>{isLast ? "Next scan due" : "Rescan was due"}</small>{" "}
-                                {fmtDate(addDays(v.scannedAt, t.intervalDays))}
-                              </div>
                               {r.result === "Not improving" && (
                                 <div className="bad">
                                   Risk has not dropped. Repeat the spray, and if it stays the same at the next visit, show the crop to your local agri officer.
@@ -401,6 +414,7 @@ export default function HealthPassport({
     </div>
   );
 }
+
 /* ------------------------------------------------------------------
    4. STYLES - scoped under .hp
 ------------------------------------------------------------------- */
@@ -448,12 +462,12 @@ const CSS = `
 .hp-follow,.hp-clear{margin-top:20px;padding:16px;border:1px solid var(--line);border-radius:16px;width:100%}
 .hp-clear{border-color:var(--mint);background:#0b4535}
 .hp-clear h3{font-size:18px;margin-bottom:4px}.hp-clear .hp-sumgrid{margin-top:12px}
+.hp-todo{margin-top:10px;padding:10px 12px;border-radius:12px;background:#08322a;border:1px dashed var(--mint);font-size:14px}
 .hp-follow-row{display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin-top:12px}
 .hp-big{font-size:17px;font-weight:600}
-.hp-upcoming{border-left:1px solid var(--line);padding-left:20px}.hp-upcoming small{color:var(--mint)}
 .hp-btn{background:var(--mint);color:#04261d;border:0;border-radius:999px;padding:12px 22px;font-weight:700;cursor:pointer}
 .hp-btn:disabled{background:#2a5a4b;color:#7aa597;cursor:not-allowed}
-.hp-wide{width:100%;margin:14px 0 10px}
+.hp-wide{width:100%;margin:14px 0 10px}.hp-top{margin-top:14px}
 .hp-side{display:flex;flex-direction:column;gap:6px}
 .hp-side label{font-size:13px;color:var(--mute);margin-top:10px}
 .hp-side input,.hp-side select{background:#062a21;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:10px;font-size:15px}
