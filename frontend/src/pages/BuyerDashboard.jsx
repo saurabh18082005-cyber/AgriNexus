@@ -83,10 +83,31 @@ export default function BuyerDashboard({ apiUrl, setMessage, onOpenDealRoom }) {
     }
 
     fetch(`${apiUrl}/api/buyers/requests/${selectedRequestId}/match`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setMatchingListings(data))
-      .catch(() => setMatchingListings([]));
-  }, [apiUrl, selectedRequestId]);
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not load matching listings.");
+        if (Array.isArray(data)) {
+          setMatchingListings(data);
+          return;
+        }
+        if (Array.isArray(data?.allocations)) {
+          setMatchingListings(data.allocations.map((allocation) => ({
+            id: allocation.listing_id,
+            crop_type: data.crop_type,
+            quantity_remaining: allocation.allocated_quantity,
+            quality_grade: allocation.quality_grade,
+            price_per_kg: allocation.price_per_kg,
+          })));
+          return;
+        }
+        throw new Error("Matching listings response has an unexpected format.");
+      })
+      .catch((error) => {
+        console.error("Could not load matching listings.", error);
+        setMatchingListings([]);
+        setMessage(`Could not load matching listings: ${error.message}`);
+      });
+  }, [apiUrl, selectedRequestId, setMessage]);
 
   const handleCreateRequest = async (e) => {
     e.preventDefault();

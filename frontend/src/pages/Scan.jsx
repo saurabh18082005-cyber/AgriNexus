@@ -18,10 +18,12 @@ export default function Scan({
   loading,
   result,
   openPassport,
+  onStartNewPassport,
   openMarket,
   readyToSell,
   readyReason,
   onRescan,
+  onTreatmentCourseUpdate,
 }) {
   const onDragOver = (e) => {
     e.preventDefault();
@@ -62,10 +64,10 @@ export default function Scan({
             onDrop={onDrop}
             role="button"
             tabIndex={0}
+            aria-label={t.choose}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") fileRef.current?.click();
             }}
-            aria-label={t.choose}
           >
             {preview ? (
               <>
@@ -105,7 +107,12 @@ export default function Scan({
               accept="image/*"
               capture="environment"
               hidden
-              onChange={(e) => handleFile(e.target.files?.[0])}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const selected = e.currentTarget.files?.[0];
+                e.currentTarget.value = "";
+                handleFile(selected);
+              }}
             />
           </div>
 
@@ -219,12 +226,12 @@ export default function Scan({
 
               <TreatmentPlan
                 diseaseClass={result.disease_class}
-                cropId={result.crop_id}
-                scanDate={result.created_at}
+                treatmentCourse={result.treatment_course}
                 location={location}
                 coords={coords}
                 recommendation={t.recommendations?.[result.risk?.recommendation] || result.risk?.recommendation}
-                onRescan={onRescan}
+                onRescan={() => onRescan?.(result.treatment_course?.id, result.crop_id)}
+                onTreatmentCourseUpdate={onTreatmentCourseUpdate}
               />
 
               {/* Report Actions */}
@@ -245,6 +252,16 @@ export default function Scan({
                   🤝 {t.findBuyers}
                 </button>
               </div>
+              <a
+                href="#start-new-passport"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onStartNewPassport?.();
+                }}
+                style={{ fontSize: "0.875rem" }}
+              >
+                Start new passport
+              </a>
               {!readyToSell && <p>{readyReason}</p>}
             </div>
           ) : (

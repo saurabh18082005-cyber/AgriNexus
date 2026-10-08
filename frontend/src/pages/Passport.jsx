@@ -1,5 +1,6 @@
 import RiskBadge from "../components/RiskBadge";
 import HarvestForm from "../components/HarvestForm";
+import HealthPassport from "../components/HealthPassport";
 
 export default function Passport({
   t,
@@ -10,9 +11,70 @@ export default function Passport({
   apiUrl,
   readyToSell,
   readyReason,
+  loading,
+  error,
+  onRetry,
+  onRescan,
 }) {
   const isHarvested = Boolean(passport?.harvest);
   const fillText = fill || ((text, vars) => text.replace(/\{(\w+)\}/g, (_, key) => vars[key]));
+  const treatmentCourses = passport?.treatment_courses || [];
+  const chronologicalScans = [...(passport?.scans || [])].sort((left, right) => {
+    const leftTime = new Date(left.created_at).getTime();
+    const rightTime = new Date(right.created_at).getTime();
+    const timeDifference = (Number.isNaN(leftTime) ? 0 : leftTime) - (Number.isNaN(rightTime) ? 0 : rightTime);
+    return timeDifference || left.id - right.id;
+  });
+  const latestScan = chronologicalScans.at(-1) || null;
+  const latestScanIsHealthy = String(latestScan?.disease || "").toLowerCase().includes("healthy");
+  const currentTreatment = !latestScanIsHealthy && latestScan
+    ? treatmentCourses.find((course) => course.scans?.some((item) => item.scan?.id === latestScan.id)) || null
+    : null;
+  const formatWorkflowDate = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+  const followUpIntervalDays = Number(currentTreatment?.follow_up_interval_days);
+  const hasVerifiedFollowUp = Boolean(
+    currentTreatment?.follow_up_required
+    && Number.isInteger(followUpIntervalDays)
+    && followUpIntervalDays > 0
+    && currentTreatment?.next_follow_up_at
+    && formatWorkflowDate(currentTreatment.next_follow_up_at)
+  );
+  const toPercent = (value) => {
+    const number = Number(value);
+    return value == null || !Number.isFinite(number)
+      ? undefined
+      : Math.min(100, Math.max(0, number));
+  };
+  const mappedScans = chronologicalScans.map((scan) => ({
+    id: scan.id,
+    disease: scan.disease,
+    confidence: toPercent(scan.confidence),
+    risk: toPercent(scan.risk_score),
+    temp: scan.temperature,
+    humidity: scan.humidity,
+    rain: scan.rainfall,
+    scannedAt: scan.created_at ? new Date(scan.created_at).toISOString() : undefined,
+  }));
+  const mappedSprays = treatmentCourses.flatMap((course) =>
+    (course.applications || []).map((application, index) => ({
+      id: application.id,
+      disease: course.disease_class,
+      sprayNo: index + 1,
+      totalSprays: course.total_applications ?? undefined,
+      date: application.applied_at ? new Date(application.applied_at).toISOString() : undefined,
+      temp: undefined,
+      humidity: undefined,
+      risk: undefined,
+    }))
+  );
 
   const lifecycleStages = [
     { label: t.lifecycleSeed, icon: "🌱", active: true },
@@ -31,7 +93,17 @@ export default function Passport({
         <p>{t.passportDesc}</p>
       </div>
 
-      {passport ? (
+      {loading ? (
+        <div className="panel empty-state" role="status">
+          <h2>Loading Health Passport…</h2>
+        </div>
+      ) : error ? (
+        <div className="panel empty-state" role="alert">
+          <h2>Health Passport could not be loaded</h2>
+          <p>{error}</p>
+          <button type="button" className="btn-primary" onClick={onRetry}>Try again</button>
+        </div>
+      ) : passport ? (
         <div className="passport-split-layout">
           {/* Main Passport Digital Certificate Card */}
           <div className="passport-card-cert">
@@ -95,55 +167,16 @@ export default function Passport({
               </div>
             </div>
 
-            {/* Health & Condition Observation Timeline */}
-            <div className="timeline-scroller">
-              <div className="timeline-header-bar">
-                <span className="eyebrow" style={{ margin: 0 }}>
-                  {t.passportAuditTrail}
-                </span>
-                <span className="scans-count-tag">
-                  {fillText(t.passportEventCount, { count: passport.scans ? passport.scans.length : 0 })}
-                </span>
-              </div>
-
-              {passport.scans && passport.scans.length > 0 ? (
-                passport.scans.map((scan, idx) => (
-                  <div className="timeline-node-item" key={scan.id}>
-                    <div className="timeline-dot-pin" />
-                    <div className="timeline-body">
-                      <div className="timeline-top-row">
-                        <div className="timeline-title-wrap">
-                          <span className="event-index-pill">#{String(passport.scans.length - idx).padStart(2, "0")}</span>
-                          <b>{t.diseases?.[scan.disease] || scan.disease}</b>
-                        </div>
-                        <RiskBadge level={scan.risk_level} t={t} />
-                      </div>
-                      <div className="timeline-timestamp">
-                        📅 {new Date(scan.created_at).toLocaleString()}
-                      </div>
-                      <div className="timeline-badges-wrap">
-                        <span className="timeline-meta-pill">
-                          🤖 {t.aiLabel} {scan.confidence}% {t.passportConf}
-                        </span>
-                        <span className="timeline-meta-pill">
-                          🌡️ {Math.round(scan.temperature)}°C {t.passportTemp}
-                        </span>
-                        <span className="timeline-meta-pill">
-                          💧 {Math.round(scan.humidity)}% {t.humidity}
-                        </span>
-                        <span className="timeline-meta-pill">
-                          ⚠️ {t.risk}: {scan.risk_score}%
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="timeline-empty-message">
-                  <p>{t.noData}</p>
-                </div>
-              )}
-            </div>
+            <HealthPassport
+              crop={t.crops?.[passport.crop.crop_type] || passport.crop.crop_type}
+              passportId={`ANX-${String(passport.crop.id).padStart(5, "0")}`}
+              farmer={passport.crop.farmer_name}
+              location={passport.crop.location}
+              scans={mappedScans}
+              sprays={mappedSprays}
+              onRescan={() => onRescan?.(currentTreatment?.id ?? null)}
+              showHarvestPanel={false}
+            />
           </div>
 
           {/* Harvest & Batch Handoff Certification */}

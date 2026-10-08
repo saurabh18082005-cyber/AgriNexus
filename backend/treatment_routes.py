@@ -20,6 +20,10 @@ NORMALIZED_DATA = {
     for key, value in DATA.items()
 }
 
+def get_treatment_entry(disease: str):
+    normalized = re.sub(r"[\s_]+", " ", disease.strip().lower())
+    return NORMALIZED_DATA.get(normalized)
+
 # 1 acre = 40 guntha, 1 hectare = 2.471 acre
 ACRES_PER_UNIT = {"acre": 1.0, "guntha": 1 / 40, "hectare": 2.471}
 
@@ -37,7 +41,7 @@ def get_treatment(
     area: float = Query(..., gt=0, description="Field size"),
     unit: str = "acre",
 ):
-    entry = NORMALIZED_DATA.get(re.sub(r"[\s_]+", " ", disease.strip().lower()))
+    entry = get_treatment_entry(disease)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"No treatment entry for '{disease}'")
 
@@ -74,5 +78,4 @@ def get_treatment(
         "interval_days": entry["interval_days"],
         "wait_days": entry["wait_days"],
         "organic": entry["organic"],
-        "rescan_after_days": 3,
     }
