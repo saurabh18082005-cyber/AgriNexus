@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export default function HarvestForm({ cropId, onDone, t, apiUrl }) {
+export default function HarvestForm({ cropId, onDone, t, apiUrl, eligible = true }) {
   const [quantity, setQuantity] = useState(100);
   const [grade, setGrade] = useState("A");
   const [busy, setBusy] = useState(false);
@@ -57,7 +57,7 @@ export default function HarvestForm({ cropId, onDone, t, apiUrl }) {
       <button
         type="submit"
         className="btn-primary btn-full"
-        disabled={busy}
+        disabled={!eligible || busy}
       >
         {busy ? t.saving : `✓ ${t.verifyHarvest}`}
       </button>

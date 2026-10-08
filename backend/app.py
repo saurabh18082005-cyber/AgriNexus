@@ -94,6 +94,7 @@ SPRAY_WEATHER_THRESHOLDS = {
 SPRAY_WEATHER_CACHE_TTL = timedelta(minutes=30)
 spray_weather_cache: dict[tuple[float, float], tuple[datetime, dict[str, Any]]] = {}
 PASSPORT_GAP_DAYS = 7
+MIN_HEALTHY_CONFIDENCE = 70
 
 Base.metadata.create_all(bind=engine)
 
@@ -414,6 +415,12 @@ async def scan(
                 last_scan_at = last_scan_at.replace(tzinfo=timezone.utc)
             scan_age = now - last_scan_at
             if scan_age < timedelta(0) or scan_age > timedelta(days=PASSPORT_GAP_DAYS):
+                continue
+
+            if (
+                "healthy" in (last_scan.disease or "").casefold()
+                and last_scan.confidence >= MIN_HEALTHY_CONFIDENCE
+            ):
                 continue
 
             harvest = pg_db.query(models.Harvest).filter(

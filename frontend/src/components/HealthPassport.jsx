@@ -179,6 +179,7 @@ export default function HealthPassport({
   scans = [],
   sprays = [],
   getTreatment,
+  onRecordSpray,
   onRescan = () => {},
   onNewPassport,
   onVerifyHarvest = () => {},
@@ -188,12 +189,32 @@ export default function HealthPassport({
   const [qty, setQty] = useState(100);
   const [quality, setQuality] = useState("Grade A (Premium Retail)");
   const [showDetails, setShowDetails] = useState(false);
+  const [sprayBusy, setSprayBusy] = useState(false);
+  const [sprayError, setSprayError] = useState("");
   const now = new Date();
   const s = useMemo(() => buildPassportState(scans, sprays, getTreatment), [scans, sprays, getTreatment]);
   const rows = useMemo(
     () => (s.latest ? visitRows(s.visits, sprays, getTreatment) : []),
     [s, sprays, getTreatment]
   );
+  const recordSpray = async () => {
+    if (!onRecordSpray || !s.nextVisit?.sprayNo || sprayBusy) return;
+    setSprayBusy(true);
+    setSprayError("");
+    try {
+      await onRecordSpray({
+        sprayNo: s.nextVisit.sprayNo,
+        totalSprays: s.nextVisit.total,
+        disease: s.lastSick?.disease || s.latest.disease,
+        medicine: s.plan.medicine,
+        dose: s.plan.dose,
+      });
+    } catch (error) {
+      setSprayError(error.message || "Could not record spray.");
+    } finally {
+      setSprayBusy(false);
+    }
+  };
 
   return (
     <div className="hp">
@@ -277,7 +298,13 @@ export default function HealthPassport({
                       </div>
                     </div>
                     <button className="hp-btn" onClick={onRescan}>↻ Scan crop now</button>
+                    {onRecordSpray && s.nextVisit.sprayNo && (
+                      <button className="hp-btn" onClick={recordSpray} disabled={sprayBusy}>
+                        {sprayBusy ? "Saving…" : "I did spray"}
+                      </button>
+                    )}
                   </div>
+                  {sprayError && <p className="hp-muted" role="alert">{sprayError}</p>}
                 </div>
               )}
 

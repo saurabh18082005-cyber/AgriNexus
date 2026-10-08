@@ -1,6 +1,10 @@
 import RiskBadge from "../components/RiskBadge";
 import HarvestForm from "../components/HarvestForm";
-import HealthPassport from "../components/HealthPassport";
+import HealthPassport, { buildPassportState } from "../components/HealthPassport";
+import treatments from "../../../backend/treatments.json";
+
+const cleanTreatmentText = (value = "") =>
+  String(value).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 export default function Passport({
   t,
@@ -9,7 +13,6 @@ export default function Passport({
   openPassport,
   setPage,
   apiUrl,
-  readyToSell,
   readyReason,
   loading,
   error,
@@ -75,6 +78,52 @@ export default function Passport({
       risk: undefined,
     }))
   );
+  const cropName = passport?.crop?.crop_type || "";
+  const getTreatment = (disease) => {
+    const cleanDisease = cleanTreatmentText(disease);
+    const cleanCrop = cleanTreatmentText(cropName);
+    const match = Object.entries(treatments).find(([key]) => {
+      const [crop, diseaseName = key] = key.split("___");
+      const cleanEntryCrop = cleanTreatmentText(crop);
+      const cleanEntryDisease = cleanTreatmentText(diseaseName);
+      const cropMatches =
+        !key.includes("___")
+        || !cleanCrop
+        || cleanCrop.includes(cleanEntryCrop)
+        || cleanEntryCrop.includes(cleanCrop);
+      const diseaseMatches =
+        cleanEntryDisease.includes(cleanDisease)
+        || cleanDisease.includes(cleanEntryDisease);
+      return cropMatches && diseaseMatches;
+    });
+    if (!match) return undefined;
+
+    const entry = match[1];
+    return {
+      ...(Object.hasOwn(entry, "medicine") ? { medicine: entry.medicine } : {}),
+      ...(entry.dose != null
+        ? { dose: `${entry.dose}${entry.dose_unit ? ` ${entry.dose_unit}` : ""} per litre of water` }
+        : {}),
+      ...(entry.sprays != null ? { totalSprays: entry.sprays } : {}),
+      ...(entry.interval_days != null ? { intervalDays: entry.interval_days } : {}),
+      ...(entry.wait_days != null ? { waitDays: entry.wait_days } : {}),
+    };
+  };
+  const state = buildPassportState(mappedScans, mappedSprays, getTreatment);
+  const recordSpray = async (_spray) => {
+    if (!currentTreatment?.id) {
+      throw new Error("No treatment course is available for this Passport.");
+    }
+    const response = await fetch(
+      `${apiUrl}/api/treatment-courses/${currentTreatment.id}/applications`,
+      { method: "POST" }
+    );
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "Could not record treatment application.");
+    }
+    await openPassport(passport.crop.id);
+  };
 
   const lifecycleStages = [
     { label: t.lifecycleSeed, icon: "🌱", active: true },
@@ -174,6 +223,8 @@ export default function Passport({
               location={passport.crop.location}
               scans={mappedScans}
               sprays={mappedSprays}
+              getTreatment={getTreatment}
+              onRecordSpray={recordSpray}
               onRescan={() => onRescan?.(currentTreatment?.id ?? null)}
               showHarvestPanel={false}
             />
@@ -218,13 +269,12 @@ export default function Passport({
                   onDone={openPassport}
                   t={t}
                   apiUrl={apiUrl}
+                  eligible={Boolean(state.eligible)}
                 />
               </div>
             )}
-            <div className={`market-badge ${readyToSell ? "" : "status-pending"}`}>
-              {readyToSell ? "✓ Ready to sell" : "Not ready"}
-            </div>
-            {!readyToSell && <p>{readyReason}</p>}
+            {state.eligible && <div className="market-badge">✓ Ready to sell</div>}
+            {!state.eligible && readyReason && <p>{readyReason}</p>}
           </div>
         </div>
       ) : (
