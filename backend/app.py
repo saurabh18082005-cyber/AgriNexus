@@ -94,7 +94,7 @@ SPRAY_WEATHER_THRESHOLDS = {
 SPRAY_WEATHER_CACHE_TTL = timedelta(minutes=30)
 spray_weather_cache: dict[tuple[float, float], tuple[datetime, dict[str, Any]]] = {}
 PASSPORT_GAP_DAYS = 7
-MIN_HEALTHY_CONFIDENCE = 70
+MIN_HEALTHY_CONFIDENCE = 0
 
 Base.metadata.create_all(bind=engine)
 

@@ -263,7 +263,14 @@ export default function Passport({
               </div>
             ) : (
               <div className="harvest-recorder-block">
-                <p>{t.harvestPrompt}</p>
+                {state.eligible ? (
+                  <p>{readyReason}</p>
+                ) : (
+                  <>
+                    <p>{t.harvestPrompt}</p>
+                    <p>{state.reason}</p>
+                  </>
+                )}
                 <HarvestForm
                   cropId={passport.crop.id}
                   onDone={openPassport}
@@ -274,7 +281,6 @@ export default function Passport({
               </div>
             )}
             {state.eligible && <div className="market-badge">✓ Ready to sell</div>}
-            {!state.eligible && readyReason && <p>{readyReason}</p>}
           </div>
         </div>
       ) : (

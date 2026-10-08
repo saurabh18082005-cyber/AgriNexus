@@ -3,13 +3,14 @@ import { useMemo, useState } from "react";
 /* ------------------------------------------------------------------
    1. SETTINGS - change these numbers, nothing else needs touching
 ------------------------------------------------------------------- */
-const REQUIRED_HEALTHY_SCANS = 1;   // confirmed healthy scans in a row before "ready to sell"
-const MIN_HEALTHY_CONFIDENCE = 70;  // a "Healthy" scan below this AI confidence does not count
+const REQUIRED_HEALTHY_SCANS = 1;   // confirmed healthy scans in a row before the crop counts as healthy
+const MIN_HEALTHY_CONFIDENCE = 0;    // 0 = any scan labelled Healthy counts. Set 50 to ignore weak Healthy guesses
 const IMPROVE_BY = 5;               // risk must drop by at least this many points to count as "improving"
+const DEMO_SKIP_HARVEST_WAIT = true; // true = ignore the safe-to-harvest wait so a demo can reach "Ready to sell". Set false for real use.
 const DEFAULT_PLAN = { medicine: "", dose: "", intervalDays: 3, totalSprays: 3, waitDays: 7 };
-// waitDays = days to wait after the last spray before harvest. Set to 0 in TREATMENTS if you want a quick demo.
+// waitDays = days to wait after the last spray before harvest. Set to 0 for a quick demo.
 
-// Fallback only. Best: pass the getTreatment prop (the same lookup your Treatment Plan uses).
+// Fallback only. The real source is treatments.json, passed in through the getTreatment prop.
 const TREATMENTS = {
   "bacterial spot": { medicine: "Copper hydroxide 77% WP", dose: "2 g per litre of water", intervalDays: 3, totalSprays: 3, waitDays: 7 },
   "early blight": { ...DEFAULT_PLAN },
@@ -31,7 +32,7 @@ export const prettyDisease = (s = "") => {
 };
 
 export const isHealthy = (scan) => normalize(scan.disease).includes("healthy");
-const confirmedHealthy = (scan) => isHealthy(scan) && Number(scan.confidence) >= MIN_HEALTHY_CONFIDENCE;
+const confirmedHealthy = (scan) => isHealthy(scan) && !(Number(scan.confidence) < MIN_HEALTHY_CONFIDENCE);
 
 export function planFor(disease, getTreatment) {
   const n = normalize(disease);
@@ -93,6 +94,8 @@ export function visitRows(visits, sprays = [], getTreatment) {
 }
 
 // IMPORTANT: pass only the scans and sprays of ONE passport.
+//   state.complete = the crop is healthy, so the passport is finished (new scans must open a new passport)
+//   state.eligible = complete AND the safe-to-harvest wait is over (ready to sell)
 export function buildPassportState(scans, sprays = [], getTreatment, now = new Date()) {
   const visits = [...scans].sort((a, b) => new Date(a.scannedAt) - new Date(b.scannedAt));
   const latest = visits[visits.length - 1];
@@ -106,7 +109,8 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
   const lastSpray = courseSprays[courseSprays.length - 1];
   const spraysDone = Math.min(courseSprays.length, plan.totalSprays); // never "8 of 3"
   const waitUntil = lastSpray ? addDays(lastSpray.date, plan.waitDays) : null;
-  const waitOver = !waitUntil || now >= waitUntil;
+  const waitSkipped = DEMO_SKIP_HARVEST_WAIT && !!waitUntil && now < waitUntil;
+  const waitOver = DEMO_SKIP_HARVEST_WAIT || !waitUntil || now >= waitUntil;
 
   let streak = 0;
   for (let i = visits.length - 1; i >= 0 && confirmedHealthy(visits[i]); i--) streak++;
@@ -115,9 +119,9 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
   const delta = prev ? Math.round(latest.risk - prev.risk) : 0;
   const healthyNow = isHealthy(latest);
   const confirmed = confirmedHealthy(latest);
-  const cleared = confirmed && streak >= REQUIRED_HEALTHY_SCANS; // crop is healthy
-  const eligible = cleared && waitOver;                          // healthy and safe to harvest
-  const healthyHold = cleared && !waitOver;                      // healthy, only waiting for safe-to-harvest date
+  const complete = confirmed && streak >= REQUIRED_HEALTHY_SCANS; // crop is healthy
+  const eligible = complete && waitOver;                          // healthy and safe to harvest
+  const healthyHold = complete && !waitOver;                      // healthy, only waiting for the safe date
 
   let status;
   if (eligible) status = "Cleared: ready to sell";
@@ -129,23 +133,30 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
   else if (delta <= -IMPROVE_BY) status = "Improving";
   else status = "Not improving";
 
+  // One spray per visit: scan, spray, then scan again after the interval.
+  const latestIdx = visits.length - 1;
+  const needsSprays = !healthyNow && courseSprays.length < plan.totalSprays;
+  const sprayedThisVisit = !healthyNow && courseSprays.some((sp) => sprayVisitIndex(visits, sp) === latestIdx);
+  const sprayPending = needsSprays && !sprayedThisVisit;
+  const sprayToday = sprayPending ? { no: courseSprays.length + 1, total: plan.totalSprays } : null;
+  const sprayedAfterToday = courseSprays.length + (sprayPending ? 1 : 0);
+
   // ONE next-visit date: the next scan and the next spray happen on the same day.
   const baseDate =
     lastSpray && new Date(lastSpray.date) > new Date(latest.scannedAt) ? lastSpray.date : latest.scannedAt;
-  const needsSprays = !healthyNow && courseSprays.length < plan.totalSprays;
   const nextVisit =
     eligible || healthyHold
       ? null
       : {
           date: addDays(baseDate, plan.intervalDays),
-          sprayNo: needsSprays ? courseSprays.length + 1 : null,
+          sprayNo: !healthyNow && sprayedAfterToday < plan.totalSprays ? sprayedAfterToday + 1 : null,
           total: plan.totalSprays,
         };
-  const sprayNow = !healthyNow && courseSprays.length === 0; // first spray: do it today
 
   return {
     visits, latest, caseStart, lastSick, plan, streak, delta, status,
-    eligible, healthyHold, sprayNow, nextVisit, courseSprays, spraysDone, waitUntil,
+    complete, eligible, healthyHold, sprayToday, sprayedThisVisit, nextVisit,
+    courseSprays, spraysDone, waitUntil, waitSkipped,
     daysToRecover: daysBetween(caseStart.scannedAt, latest.scannedAt),
     reason: eligible
       ? ""
@@ -162,7 +173,8 @@ export function buildPassportState(scans, sprays = [], getTreatment, now = new D
    scans:  [{ id, disease, confidence, risk, temp, humidity, rain, scannedAt, treatment? }]
    sprays: [{ id, disease, sprayNo, totalSprays, date }]
    getTreatment (optional): (disease) => ({ medicine, dose, intervalDays, totalSprays, waitDays })
-   onNewPassport (optional): shows a "Scan a new crop" button once this passport is complete.
+   onRecordSpray (optional): async ({ sprayNo, totalSprays, disease, medicine, dose }) => save the spray, then reload sprays
+   onNewPassport (optional): shows a "Scan a new crop" button once the crop is ready to sell.
 ------------------------------------------------------------------- */
 const Stat = ({ label, value }) => (
   <div className="hp-stat">
@@ -179,8 +191,8 @@ export default function HealthPassport({
   scans = [],
   sprays = [],
   getTreatment,
-  onRecordSpray,
   onRescan = () => {},
+  onRecordSpray,
   onNewPassport,
   onVerifyHarvest = () => {},
   showHeader = true,
@@ -189,30 +201,27 @@ export default function HealthPassport({
   const [qty, setQty] = useState(100);
   const [quality, setQuality] = useState("Grade A (Premium Retail)");
   const [showDetails, setShowDetails] = useState(false);
-  const [sprayBusy, setSprayBusy] = useState(false);
-  const [sprayError, setSprayError] = useState("");
+  const [saving, setSaving] = useState(false);
   const now = new Date();
   const s = useMemo(() => buildPassportState(scans, sprays, getTreatment), [scans, sprays, getTreatment]);
   const rows = useMemo(
     () => (s.latest ? visitRows(s.visits, sprays, getTreatment) : []),
     [s, sprays, getTreatment]
   );
-  const recordSpray = async () => {
-    if (!onRecordSpray || !s.nextVisit?.sprayNo || sprayBusy) return;
-    setSprayBusy(true);
-    setSprayError("");
+
+  const handleSpray = async () => {
+    if (!s.sprayToday || !onRecordSpray) return;
+    setSaving(true);
     try {
       await onRecordSpray({
-        sprayNo: s.nextVisit.sprayNo,
-        totalSprays: s.nextVisit.total,
-        disease: s.lastSick?.disease || s.latest.disease,
-        medicine: s.plan.medicine,
-        dose: s.plan.dose,
+        sprayNo: s.sprayToday.no,
+        totalSprays: s.sprayToday.total,
+        disease: (s.lastSick || s.latest).disease,
+        medicine: s.plan.medicine || "",
+        dose: s.plan.dose || "",
       });
-    } catch (error) {
-      setSprayError(error.message || "Could not record spray.");
     } finally {
-      setSprayBusy(false);
+      setSaving(false);
     }
   };
 
@@ -256,6 +265,11 @@ export default function HealthPassport({
                   <p className="hp-muted">
                     No more scans are needed. This passport is complete. A new scan starts a new passport.
                   </p>
+                  {s.waitSkipped && (
+                    <p className="hp-muted">
+                      Demo mode: the safe-to-harvest wait ({s.plan.waitDays} days after the last spray) is skipped.
+                    </p>
+                  )}
                   <div className="hp-sumgrid">
                     <Stat label="Disease treated" value={s.lastSick ? prettyDisease(s.lastSick.disease) : "None"} />
                     <Stat label="Medicine used" value={s.lastSick ? s.plan.medicine || "Not available" : "None needed"} />
@@ -280,13 +294,28 @@ export default function HealthPassport({
               ) : (
                 <div className="hp-follow">
                   <h3>Next visit</h3>
-                  {s.sprayNow && (
+
+                  {s.sprayToday && (
                     <div className="hp-todo">
-                      Today: Spray 1 of {s.plan.totalSprays}
-                      {s.plan.medicine ? ` · ${s.plan.medicine}` : ""}
-                      {s.plan.dose ? ` · ${s.plan.dose}` : ""}
+                      <div>
+                        <b>Spray {s.sprayToday.no} of {s.sprayToday.total} today</b>
+                        {(s.plan.medicine || s.plan.dose) && (
+                          <div className="hp-muted">{[s.plan.medicine, s.plan.dose].filter(Boolean).join(" · ")}</div>
+                        )}
+                      </div>
+                      {onRecordSpray && (
+                        <button className="hp-btn hp-sm" disabled={saving} onClick={handleSpray}>
+                          {saving ? "Saving..." : `✓ I did spray ${s.sprayToday.no}`}
+                        </button>
+                      )}
                     </div>
                   )}
+                  {s.sprayedThisVisit && (
+                    <div className="hp-done">
+                      ✓ Spray {Math.min(s.courseSprays.length, s.plan.totalSprays)} of {s.plan.totalSprays} recorded for this visit
+                    </div>
+                  )}
+
                   <div className="hp-follow-row">
                     <div>
                       <div className="hp-big">{fmtDate(s.nextVisit.date)}</div>
@@ -298,13 +327,7 @@ export default function HealthPassport({
                       </div>
                     </div>
                     <button className="hp-btn" onClick={onRescan}>↻ Scan crop now</button>
-                    {onRecordSpray && s.nextVisit.sprayNo && (
-                      <button className="hp-btn" onClick={recordSpray} disabled={sprayBusy}>
-                        {sprayBusy ? "Saving…" : "I did spray"}
-                      </button>
-                    )}
                   </div>
-                  {sprayError && <p className="hp-muted" role="alert">{sprayError}</p>}
                 </div>
               )}
 
@@ -344,7 +367,6 @@ export default function HealthPassport({
                 </table>
               </div>
 
-              {/* 4. VISIT DETAILS (hidden until asked) */}
               <button className="hp-link" onClick={() => setShowDetails((x) => !x)}>
                 {showDetails ? "Hide visit details" : `Show visit details (${s.visits.length})`}
               </button>
@@ -489,11 +511,13 @@ const CSS = `
 .hp-follow,.hp-clear{margin-top:20px;padding:16px;border:1px solid var(--line);border-radius:16px;width:100%}
 .hp-clear{border-color:var(--mint);background:#0b4535}
 .hp-clear h3{font-size:18px;margin-bottom:4px}.hp-clear .hp-sumgrid{margin-top:12px}
-.hp-todo{margin-top:10px;padding:10px 12px;border-radius:12px;background:#08322a;border:1px dashed var(--mint);font-size:14px}
+.hp-todo{margin-top:10px;padding:12px;border-radius:12px;background:#08322a;border:1px dashed var(--mint);font-size:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.hp-done{margin-top:10px;font-size:14px;color:var(--mint)}
 .hp-follow-row{display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin-top:12px}
 .hp-big{font-size:17px;font-weight:600}
 .hp-btn{background:var(--mint);color:#04261d;border:0;border-radius:999px;padding:12px 22px;font-weight:700;cursor:pointer}
 .hp-btn:disabled{background:#2a5a4b;color:#7aa597;cursor:not-allowed}
+.hp-sm{padding:9px 16px}
 .hp-wide{width:100%;margin:14px 0 10px}.hp-top{margin-top:14px}
 .hp-side{display:flex;flex-direction:column;gap:6px}
 .hp-side label{font-size:13px;color:var(--mute);margin-top:10px}

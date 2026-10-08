@@ -41,6 +41,7 @@ export default function HarvestForm({ cropId, onDone, t, apiUrl, eligible = true
           step="any"
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
+          disabled={!eligible}
           required
         />
       </label>
