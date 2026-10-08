@@ -2,10 +2,12 @@ import { LANG } from "../translations";
 
 export default function Navigation({ page, nav, lang, setLang, t }) {
   const tabs = [
-    { id: "home", label: t.navHome, icon: "🌱" },
-    { id: "scan", label: t.navScan, icon: "🔬" },
-    { id: "passport", label: t.navPassport, icon: "🪪" },
-    { id: "market", label: t.navMarket, icon: "🤝" },
+    { id: "home", label: t.navHome || "Home", icon: "🌱" },
+    { id: "scan", label: t.navScan || "Scan", icon: "🔬" },
+    { id: "passport", label: t.navPassport || "Passport", icon: "🪪" },
+    { id: "market", label: t.navMarket || "Farmer Market", icon: "🌾" },
+    { id: "buyer", label: "Buyer Hub", icon: "🛒" },
+    { id: "dealroom", label: "Deal Room", icon: "💼" },
   ];
 
   return (

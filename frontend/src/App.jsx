@@ -10,8 +10,52 @@ import Home from "./pages/Home";
 import Scan from "./pages/Scan";
 import Passport from "./pages/Passport";
 import Market from "./pages/Market";
+import BuyerDashboard from "./pages/BuyerDashboard";
+import DealRoom from "./pages/DealRoom";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
+function getPassportReadiness(passport) {
+  const scans = passport?.scans || [];
+  const latest = scans[0];
+  if (!latest) return { ready: false, reason: "A health scan is required." };
+
+  const latestDisease = (latest.disease || "").toLowerCase();
+  const recentRisks = scans.slice(0, 3).map((scan) => Number(scan.risk_score ?? scan.risk?.score));
+  const healthy = latestDisease.includes("healthy");
+  const lowAndDecreasing = recentRisks.length >= 2 &&
+    recentRisks[0] < 40 &&
+    recentRisks.every((risk, index) => index === 0 || recentRisks[index - 1] > risk);
+  if (!healthy && !lowAndDecreasing) {
+    return { ready: false, reason: "The latest scan is not healthy with low, decreasing risk." };
+  }
+
+  let latestSpray = null;
+  const prefix = `agrinexus-treatment-${passport.crop?.id}-`;
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(prefix)) continue;
+    try {
+      const data = JSON.parse(localStorage.getItem(key));
+      const dates = data?.sprayedDates || (data?.sprayedOn ? [data.sprayedOn] : []);
+      const sprayedOn = dates[dates.length - 1];
+      if (sprayedOn && (!latestSpray || new Date(sprayedOn) > new Date(latestSpray.sprayedOn))) {
+        latestSpray = { sprayedOn, waitDays: data.waitDays };
+      }
+    } catch {
+      continue;
+    }
+  }
+  if (latestSpray) {
+    if (latestSpray.waitDays == null) return { ready: false, reason: "Harvest wait time is unavailable for the last spray." };
+    const readyDate = new Date(latestSpray.sprayedOn);
+    readyDate.setDate(readyDate.getDate() + latestSpray.waitDays);
+    if (Date.now() < readyDate.getTime()) {
+      return { ready: false, reason: `Harvest wait period ends ${readyDate.toLocaleDateString()}.` };
+    }
+  }
+  return { ready: true, reason: "Verified health conditions are met." };
+}
 
 const demoWeather = {
   temperature: 28,
@@ -41,10 +85,13 @@ export default function App() {
   const [passport, setPassport] = useState(null);
   const [weather, setWeather] = useState(demoWeather);
   const [buyers, setBuyers] = useState([]);
+  const [listings, setListings] = useState([]);
+  const [listingBusy, setListingBusy] = useState(false);
   const [location, setLocation] = useState("Bengaluru");
   const [coords, setCoords] = useState({ latitude: 12.9716, longitude: 77.5946 });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [activeDealId, setActiveDealId] = useState(null);
   const fileRef = useRef(null);
 
   const refreshDashboard = useCallback(async () => {
@@ -126,6 +173,15 @@ export default function App() {
     setMessage("");
   };
 
+  const startRescan = () => {
+    setFile(null);
+    setPreview("");
+    setResult(null);
+    setMessage("");
+    if (fileRef.current) fileRef.current.value = "";
+    setPage("scan");
+  };
+
   const useLocation = () => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
@@ -174,10 +230,10 @@ export default function App() {
     }
   };
 
-  const openPassport = async () => {
-    const cropId = result?.crop_id || dashboard.recent?.[0]?.crop_id;
+  const openPassport = async (targetCropId) => {
+    const cropId = Number.isInteger(targetCropId) ? targetCropId : result?.crop_id || dashboard.recent?.[0]?.crop_id;
     if (!cropId) {
-      setPage("passport");
+      setPage("passport-view");
       return;
     }
     try {
@@ -188,12 +244,27 @@ export default function App() {
     } catch {
       setMessage(t.msgPassport);
     }
-    setPage("passport");
+    setPage("passport-view");
   };
+
+  useEffect(() => {
+    const passportId = Number(new URLSearchParams(window.location.search).get("passport"));
+    if (!passportId) return;
+    fetch(`${API_URL}/api/passport/${passportId}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(t.msgPassport);
+        return res.json();
+      })
+      .then((data) => {
+        setPassport(data);
+        setPage("passport-view");
+      })
+      .catch((error) => setMessage(error.message));
+  }, [t.msgPassport]);
 
   const openMarket = async () => {
     let currentPassport = passport;
-    const cropId = result?.crop_id || dashboard.recent?.[0]?.crop_id;
+    const cropId = result?.crop_id || passport?.crop?.id || dashboard.recent?.[0]?.crop_id;
     if (cropId) {
       try {
         const pRes = await fetch(`${API_URL}/api/passport/${cropId}`);
@@ -201,7 +272,7 @@ export default function App() {
           currentPassport = await pRes.json();
           setPassport(currentPassport);
         }
-      } catch {}
+      } catch { }
     }
 
     const crop = result?.crop || currentPassport?.crop?.crop_type || "Tomato";
@@ -209,16 +280,47 @@ export default function App() {
       const res = await fetch(
         `${API_URL}/api/buyers?crop=${encodeURIComponent(crop)}`
       );
+
       if (res.ok) {
         setBuyers(await res.json());
       }
+
+      const resList = await fetch(`${API_URL}/api/market/listings`);
+      if (resList.ok) {
+        setListings(await resList.json());
+      }
     } catch {
       setBuyers([]);
+      setListings([]);
     }
 
-    setPage("market");
+    setPage("market-view");
   };
 
+  const createListing = async () => {
+    if (!passport?.harvest?.id) return;
+    setListingBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/market/listings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ harvest_id: passport.harvest.id })
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "Listing failed.");
+      setMessage("Harvest successfully listed on the market!");
+      openMarket();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setListingBusy(false);
+    }
+  };
+
+  const handleOpenDealRoom = (dealId) => {
+    if (dealId) setActiveDealId(dealId);
+    setPage("dealroom");
+  };
   const nav = (target) => {
     if (target === "passport") openPassport();
     else if (target === "market") openMarket();
@@ -230,6 +332,18 @@ export default function App() {
     [result, passport]
   );
 
+  const readinessPassport = result
+    ? {
+        crop: { id: result.crop_id },
+        scans: [
+          result,
+          ...(passport?.crop?.id === result.crop_id
+            ? passport.scans.filter((scan) => scan.id !== result.scan_id)
+            : []),
+        ],
+      }
+    : passport;
+  const readiness = getPassportReadiness(readinessPassport);
   return (
     <div className="app-shell">
       {/* Ambient Living Farm Particles */}
@@ -237,7 +351,7 @@ export default function App() {
 
       {/* Top Glass Navigation Bar */}
       <Navigation
-        page={page}
+        page={page === "market-view" ? "market" : page === "passport-view" ? "passport" : page}
         nav={nav}
         lang={lang}
         setLang={setLang}
@@ -252,6 +366,8 @@ export default function App() {
             setPage={setPage}
             openPassport={openPassport}
             openMarket={openMarket}
+            readyToSell={readiness.ready}
+            readyReason={readiness.reason}
             dashboard={dashboard}
             weather={weather}
             refreshWeather={refreshWeather}
@@ -269,6 +385,7 @@ export default function App() {
             handleFile={handleFile}
             fileRef={fileRef}
             location={location}
+            coords={coords}
             setLocation={setLocation}
             useLocation={useLocation}
             analyze={analyze}
@@ -276,10 +393,13 @@ export default function App() {
             result={result}
             openPassport={openPassport}
             openMarket={openMarket}
+            readyToSell={readiness.ready}
+            readyReason={readiness.reason}
+            onRescan={startRescan}
           />
         )}
 
-        {page === "passport" && (
+        {page === "passport-view" && (
           <Passport
             t={t}
             fill={fill}
@@ -287,10 +407,12 @@ export default function App() {
             openPassport={openPassport}
             setPage={setPage}
             apiUrl={API_URL}
+            readyToSell={readiness.ready}
+            readyReason={readiness.reason}
           />
         )}
 
-        {page === "market" && (
+        {page === "market-view" && (
           <Market
             t={t}
             fill={fill}
@@ -300,6 +422,26 @@ export default function App() {
             buyers={buyers}
             setMessage={setMessage}
             setPage={setPage}
+            passport={passport}
+            lotReadiness={readiness}
+            apiUrl={API_URL}
+            onOpenDealRoom={handleOpenDealRoom}
+          />
+        )}
+
+        {page === "buyer" && (
+          <BuyerDashboard
+            apiUrl={API_URL}
+            setMessage={setMessage}
+            onOpenDealRoom={handleOpenDealRoom}
+          />
+        )}
+
+        {page === "dealroom" && (
+          <DealRoom
+            dealId={activeDealId}
+            apiUrl={API_URL}
+            setMessage={setMessage}
           />
         )}
       </main>
